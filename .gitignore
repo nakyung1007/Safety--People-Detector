@@ -1,5 +1,7 @@
 # 데이터 파일
-Data/
+Data/Images/
+Data/Video/
+Data/output/video/
 
 # Model 가중치 파일
 Model/checkpoints/yolo11n-pose.pt
