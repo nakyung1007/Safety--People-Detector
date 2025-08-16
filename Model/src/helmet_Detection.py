@@ -7,26 +7,18 @@ from inference_sdk import InferenceHTTPClient, InferenceConfiguration
 def make_helmet_client(api_url: str, api_key: str,
                        min_conf: float, iou_thresh: float,
                        model_id: Optional[str] = None) -> InferenceHTTPClient:
-    """
-    헬멧 추론용 HTTP 클라이언트 생성.
-    - model_id를 같이 넘기면 client._model_id에 저장(간편 사용).
-    """
+   
     client = InferenceHTTPClient(api_url=api_url, api_key=api_key)
     client.configure(InferenceConfiguration(
         confidence_threshold=float(min_conf),
         iou_threshold=float(iou_thresh)
     ))
     if model_id:
-        # 간편 사용을 위해 동적으로 달아둠 (main에서 참조)
-        client._model_id = model_id  # noqa: SLF001 (의도적 속성 주입)
+        client._model_id = model_id  
     return client
 
 
 def _ensure_min_short_side(bgr, min_ss: int = 640):
-    """
-    짧은 변이 min_ss 미만이면 비율 유지 스케일업.
-    반환: (resized_img, scale_s), scale_s는 원본→리사이즈 배율.
-    """
     h, w = bgr.shape[:2]
     ss = min(h, w)
     if ss >= min_ss:
@@ -66,13 +58,7 @@ def infer_helmet_boxes(client: InferenceHTTPClient,
                        label_name: str,
                        min_conf: float = 0.65,
                        min_short_side: int = 640) -> List[Tuple[list, float]]:
-    """
-    프레임에서 헬멧 박스 목록을 반환.
-    반환: [([x1,y1,x2,y2], score), ...]  (좌표는 '원본 프레임' 기준)
-
-    주의: client._model_id 가 설정되어 있어야 함.
-         (make_helmet_client(model_id=...) 또는 main에서 client._model_id = ... 설정)
-    """
+    
     if not hasattr(client, "_model_id"):
         raise ValueError("helmet_detection: client._model_id가 설정되지 않았습니다. "
                          "make_helmet_client(model_id=...)로 생성하거나, "
@@ -81,7 +67,6 @@ def infer_helmet_boxes(client: InferenceHTTPClient,
     H, W = frame_bgr.shape[:2]
     img_for_infer, s = _ensure_min_short_side(frame_bgr, min_short_side)
 
-    # 임시 파일로 저장 후 추론
     fd, tmp = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     cv2.imwrite(tmp, img_for_infer)
@@ -103,16 +88,13 @@ def infer_helmet_boxes(client: InferenceHTTPClient,
         if name != ln or conf < float(min_conf):
             continue
 
-        # API는 cx,cy,w,h 기준(픽셀, 리사이즈된 이미지 좌표계)
         cx = float(p.get("x")); cy = float(p.get("y"))
         pw = float(p.get("width")); ph = float(p.get("height"))
         xyxy = _cxcywh_to_xyxy(cx, cy, pw, ph)
 
-        # 리사이즈 했다면 원본 좌표로 역스케일
         if s != 1.0:
             xyxy = [v / s for v in xyxy]
 
-        # 경계 클립
         xyxy = _clip_xyxy(xyxy, W, H)
         out.append((xyxy, conf))
 
@@ -123,12 +105,7 @@ def person_has_helmet(person_xyxy,
                       helmet_boxes: List[Tuple[list, float]],
                       top_ratio: float = 0.45,
                       iou_thr: float = 0.05) -> Tuple[bool, Optional[float]]:
-    """
-    사람 박스와 헬멧 박스를 매칭:
-      - IoU >= iou_thr
-      - 헬멧 중심이 사람 박스 내부 AND 상단 top_ratio 영역에 위치
-    반환: (has_helmet, best_score or None)
-    """
+    
     x1, y1, x2, y2 = person_xyxy
     best = 0.0
     found = False
