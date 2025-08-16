@@ -3,12 +3,14 @@ Data/Images/
 Data/Video/
 Data/output/video/
 
+
 # Model 가중치 파일
 Model/checkpoints/yolo11n-pose.pt
 Model/src/trackers/
 
 # 가상화면
 env/
+
 
 #config
 config.py
