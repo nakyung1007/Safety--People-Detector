@@ -30,10 +30,28 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
+    #MOTA 평가를 위한 코드 추가
+    mot_dir = os.path.join(OUT_DIR, "tracking_mot")
+    os.makedirs(mot_dir, exist_ok=True)
+    mot_output_path = os.path.join(mot_dir, f"{base}.txt")
+    mot_file = open(mot_output_path, "w")
+
+     # 크롭된 바운딩 박스 영상들을 개별 파일로 저장
+    bbox_dir = os.path.join(OUT_DIR, "bbox_crops")
+    os.makedirs(bbox_dir, exist_ok=True)
+    video_crop_dir = os.path.join(bbox_dir, base)
+    os.makedirs(video_crop_dir, exist_ok=True)
+    print(f"크롭된 바운딩 박스 영상들 저장 디렉토리: {video_crop_dir}")
+
     print(f"처리 중: {video_path}")
     print(f"총 프레임: {total}, FPS: {fps}")
+    print(f"MOTA 결과 저장 경로: {mot_output_path}")
     
     last_helmet_by_id = {}
+
+    # 각 ID별로 VideoWriter를 관리하는 딕셔너리
+    id_writers = {}
+    id_crop_sizes = {}  # 각 ID별 첫 번째 크롭 크기 저장
 
     frames_with_detection = 0
     frame_idx = 0
@@ -45,16 +63,27 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
             break
         frame_idx += 1
 
+        # 검은색 배경의 빈 프레임을 생성
+        bbox_frame = np.zeros((height, width, 3), dtype=np.uint8)
+
         #1) 사람 트래킹
         det = tracker.track_frame(frame)
         xyxys, scores, ids = det["xyxys"], det["scores"], det["ids"]
         kpt_xy, kpt_conf   = det["kpt_xy"], det["kpt_conf"]
+        
+        #MOTA 평가를 위한 코드 추가
+        if ids is not None:
+            for i, track_id in enumerate(ids):
+                # xyxy -> xywh 변환
+                x1, y1, x2, y2 = xyxys[i]
+                w, h = x2 - x1, y2 - y1
+                # MOT Challenge 포맷: <frame>, <id>, <bb_left>, <bb_top>, <bb_width>, <bb_height>, -1, -1, -1, -1
+                mot_file.write(f"{frame_idx},{int(track_id)},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},-1,-1,-1,-1\n")
 
         frame_has_detection = False
         N = xyxys.shape[0]
         
         #2) helmet Detection
-       # 2) Helmet Detection
         want_infer = (frame_idx % helmet_every == 0)
         ran_infer  = False
         helmet_boxes = None
@@ -68,12 +97,14 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
                 ran_infer = True
                 print(f"[Frame {frame_idx}] Helmet detection 실행 → 결과 {len(helmet_boxes)}개")
             except Exception as e:
-                # ★ 여기서 절대 크래시하지 않음: carry 로 대체
+                #여기서 절대 크래시하지 않음: carry 로 대체
                 print(f"[Frame {frame_idx}] Helmet detection 실패: {type(e).__name__}: {e}")
                 helmet_boxes = None  # 아래에서 carry 사용
         else:
             print(f"[Frame {frame_idx}] Helmet detection SKIP (carry 사용)")
 
+        # 크롭된 이미지들을 저장할 리스트
+        cropped_frames = []
 
         for i in range(N):
             this_kp_xy   = kpt_xy[i]   if kpt_xy   is not None and i < kpt_xy.shape[0]   else None
@@ -100,6 +131,105 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
                         if (carry_ttl is None) or ((frame_idx - seen_at) <= carry_ttl):
                             has_helmet = state  # ← 유지
 
+                # 바운딩 박스 영역 크롭 (패딩 추가)
+                x1, y1, x2, y2 = map(int, xyxys[i])
+                
+                # 패딩 계산 (바운딩 박스 크기의 15% 정도)
+                bbox_w = x2 - x1
+                bbox_h = y2 - y1
+                padding_x = int(bbox_w * 0.15)
+                padding_y = int(bbox_h * 0.2)  # 위쪽에 텍스트 공간을 위해 조금 더 여유
+                
+                # 패딩을 적용한 확장된 바운딩 박스
+                padded_x1 = max(0, x1 - padding_x)
+                padded_y1 = max(0, y1 - padding_y)
+                padded_x2 = min(width, x2 + padding_x)
+                padded_y2 = min(height, y2 + padding_y)
+                
+                # 유효한 바운딩 박스인지 확인
+                if padded_x2 > padded_x1 and padded_y2 > padded_y1:
+                    # 원본 이미지에서 패딩이 적용된 바운딩 박스 영역 크롭
+                    cropped = frame[padded_y1:padded_y2, padded_x1:padded_x2].copy()
+                    crop_h, crop_w = cropped.shape[:2]
+                    
+                    # 헬멧 착용 여부에 따른 색상 설정
+                    if has_helmet is True:
+                        color = (0, 255, 0)  # 초록색 (헬멧 착용)
+                        helmet_text = "Helmet"
+                    elif has_helmet is False:
+                        color = (0, 0, 255)  # 빨간색 (헬멧 미착용)
+                        helmet_text = "No Helmet"
+                    else:
+                        color = (0, 255, 255)  # 노란색 (불확실)
+                        helmet_text = "Unknown"
+                    
+                    # ID와 헬멧 정보를 크롭된 이미지에 추가
+                    if this_id is not None:
+                        # 텍스트 크기를 크롭된 이미지 크기에 맞게 조정
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        crop_h, crop_w = cropped.shape[:2]
+                        font_scale = min(crop_w, crop_h) / 300.0
+                        font_scale = max(0.4, min(font_scale, 1.2))
+                        thickness = max(1, int(font_scale * 2))
+                        
+                        # ID 텍스트
+                        id_text = f"ID: {this_id}"
+                        (id_w, id_h), _ = cv2.getTextSize(id_text, font, font_scale, thickness)
+                        
+                        # 헬멧 텍스트
+                        (helmet_w, helmet_h), _ = cv2.getTextSize(helmet_text, font, font_scale, thickness)
+                        
+                        # 텍스트 배경
+                        max_width = max(id_w, helmet_w)
+                        total_height = id_h + helmet_h + 10
+                        
+                        # 텍스트 배경 그리기
+                        cv2.rectangle(cropped, 
+                                    (5, 5), 
+                                    (15 + max_width, 15 + total_height), 
+                                    (40, 40, 40), -1)
+                        
+                        # ID 텍스트 그리기
+                        cv2.putText(cropped, id_text, 
+                                  (10, 15 + id_h), 
+                                  font, font_scale, color, thickness)
+                        
+                        # 헬멧 상태 텍스트 그리기
+                        cv2.putText(cropped, helmet_text, 
+                                  (10, 25 + id_h + helmet_h), 
+                                  font, font_scale, color, thickness)
+                        
+                        # 바운딩 박스 테두리 그리기 (선택사항)
+                        cv2.rectangle(cropped, (0, 0), (crop_w-1, crop_h-1), color, 3)
+
+                        # 원래 바운딩 박스 위치를 크롭된 이미지 내에서 표시
+                        relative_x1 = x1 - padded_x1
+                        relative_y1 = y1 - padded_y1
+                        relative_x2 = x2 - padded_x1
+                        relative_y2 = y2 - padded_y1
+                        cv2.rectangle(cropped, (relative_x1, relative_y1), (relative_x2, relative_y2), color, 3)
+                    
+                    # 크롭된 이미지를 리스트에 추가 (동적 크기 유지)
+                    cropped_frames.append(cropped)
+
+                    # 각 ID별로 개별 영상 파일 생성/관리
+                    if this_id is not None:
+                        if this_id not in id_writers:
+                            # 첫 번째 프레임의 크기로 VideoWriter 생성
+                            crop_video_path = os.path.join(video_crop_dir, f"ID_{this_id}_crop.mp4")
+                            id_writers[this_id] = cv2.VideoWriter(crop_video_path, fourcc, fps, (crop_w, crop_h))
+                            id_crop_sizes[this_id] = (crop_w, crop_h)
+                            print(f"ID {this_id} 크롭 영상 시작: {crop_video_path} (크기: {crop_w}x{crop_h})")
+                        else:
+                            # 기존 크기와 다르면 리사이즈 (비율 유지)
+                            target_w, target_h = id_crop_sizes[this_id]
+                            if crop_w != target_w or crop_h != target_h:
+                                cropped = cv2.resize(cropped, (target_w, target_h))
+                        
+                        # 해당 ID의 영상에 프레임 추가
+                        id_writers[this_id].write(cropped)
+
+                # 기존 draw_person 함수 호출     
                 draw_person(
                     frame, xyxys[i], this_id,
                     this_kp_xy, this_kp_conf,
@@ -132,6 +262,9 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
 
     cap.release()
     writer.release()
+    #MOTA 평가를 위한 코드 추가
+    mot_file.close() 
+    bbox_writer.release() #바운딩 박스 파일 닫기
 
     dt = time.time() - t0
 
