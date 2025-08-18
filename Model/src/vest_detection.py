@@ -12,10 +12,12 @@ import os, time, json, glob, math
 import cv2
 import numpy as np
 from inference_sdk import InferenceHTTPClient, InferenceConfiguration
+from config import *
 
 # ===================== 설정 =====================
-API_KEY          = "7iUzwZnQQnmfd4Mqm9tg".strip()     # 사용 중인 키
-VEST_MODEL_ID    = "construction-ppe-rdhzo/3"                      # 조끼 모델 (RF Universe 프로젝트/버전)
+
+VEST_API = API_KEY
+VEST_MODEL_ID    = "construction-ppe-rdhzo/3" # 조끼 모델 (RF Universe 프로젝트/버전)
 PERSON_MODEL_ID  = ""                                  # 예: "coco-person-yolov8/1" (모르면 빈 문자열 -> 비활성)
 LABEL            = "Vest"                              # "None" 혹은 "" 이면 라벨 제한 해제, 특정 라벨만 원하면 "jacket" 등
 
