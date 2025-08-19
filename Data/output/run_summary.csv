@@ -1,0 +1,11 @@
+total_frames,valid_frames,processed_fps,model_path,tracker_yaml,img_size,det_conf,device
+429,429,10.57,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolov8n-pose.pt,bytetrack.yaml,640,0.25,cpu
+443,443,10.4,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolov8n-pose.pt,bytetrack.yaml,640,0.25,cpu
+368,368,9.19,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolov8n-pose.pt,bytetrack.yaml,640,0.25,cpu
+450,444,9.88,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolov8n-pose.pt,bytetrack.yaml,640,0.25,cpu
+444,307,9.34,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolov8n-pose.pt,bytetrack.yaml,640,0.25,cpu
+429,429,10.06,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolo11n-pose.pt,bytetrack.yaml,640,0.25,cpu
+443,443,10.22,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolo11n-pose.pt,bytetrack.yaml,640,0.25,cpu
+368,368,10.15,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolo11n-pose.pt,bytetrack.yaml,640,0.25,cpu
+450,407,10.56,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolo11n-pose.pt,bytetrack.yaml,640,0.25,cpu
+444,291,10.65,/Users/chonakyung/Library/CloudStorage/GoogleDrive-whskrud1007@gmail.com/내 드라이브/학부 연구생_2025/Safety--People-Detector/Model/checkpoints/yolo11n-pose.pt,bytetrack.yaml,640,0.25,cpu

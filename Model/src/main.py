@@ -171,6 +171,15 @@ def main():
 
     with open(jsonl_path, "w", encoding="utf-8") as jf:
         for vp in video_paths:
+            # ★ 영상마다 새 트래커: ID가 1부터 다시 시작
+            tracker = Tracker(
+                model=model,
+                tracker_name=TRACKER_YAML,
+                img_size=IMG_SIZE,
+                det_conf=DET_CONF,
+                device=DEVICE
+            )
+
             process_video(
                 vp, tracker, jf,
                 helmet_client=helmet_client,
