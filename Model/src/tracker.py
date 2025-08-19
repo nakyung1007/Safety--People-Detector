@@ -8,7 +8,8 @@ class Tracker:
     def __init__(
         self,
         model: YOLO,
-        tracker_name: str = "bytetrack.yaml",  
+        tracker_name: str = "bytetrack.yaml", # byteTrack  
+        # tracker_name: str = "botsort.yaml", # Bot-track
         img_size: int = 640,
         det_conf: float = 0.25,
         device: str = "cpu",
