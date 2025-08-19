@@ -256,6 +256,7 @@ def process_video(video_path, tracker: Tracker, jsonl_file,
             frames_with_detection += 1
 
         writer.write(frame)
+        bbox_writer.write(bbox_frame)
 
         if total > 0 and frame_idx % 30 == 0:
             print(f"진행률: {frame_idx/total*100:.1f}% ({frame_idx}/{total})")
