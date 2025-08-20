@@ -1,185 +1,324 @@
-import os, json, glob, time, sys
+# scripts/quick_run.py
+import os, sys, glob, time, json
+from typing import List, Tuple, Optional, Dict
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from People_detection import *
-from tracker import *
-
+# --- 경로/설정 로딩 ---
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-from config import *
 
-from helmet_Detection import (
-    make_helmet_client, infer_helmet_boxes, person_has_helmet
+from config import (
+    VIDEO_DIR, OUT_DIR, MODEL_PATH, TRACKER_YAML, IMG_SIZE, DET_CONF,
+    DEVICE, KPT_CONF, HELMET_CONFIG, VEST_CONFIG
 )
 
-def process_video(video_path, tracker: Tracker, jsonl_file,
-                  helmet_client, helmet_label_name: str,
-                  helmet_conf: float = 0.65, helmet_min_ss: int = 640, helmet_every: int=15, carry_ttl: int = 60):
-    cap = cv2.VideoCapture(video_path)
+# --- 외부 모듈 ---
+from tracker import Tracker
+from People_detection import get_person_part, person_visible, draw_person
+from helmet_Detection import make_helmet_client, infer_helmet_boxes, person_has_helmet
+from vest_detection import (
+    make_vest_client, infer_vest_boxes, vest_color_ratio,
+    geom_ok, center_in_person_torso, match_vest_to_person
+)
 
-    fps    = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+# ------------------ 한 비디오 처리 ------------------
+def process_one_video(video_path: str,
+                      jf,
+                      model: YOLO,
+                      tracker: "Tracker",
+                      helmet_client,
+                      vest_client,
+                      max_frames: int,
+                      helmet_every: int,
+                      vest_every: int):
+    print(f"[RUN] {video_path}", flush=True)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"[WARN] 비디오 열기 실패: {video_path}")
+        return
+
+    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     base = os.path.splitext(os.path.basename(video_path))[0]
-    out_path = os.path.join(OUT_DIR, "video", f"{base}_tracked.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+    os.makedirs(os.path.join(OUT_DIR, "video"), exist_ok=True)
+    out_path = os.path.join(OUT_DIR, "video", f"{base}__quick.mp4")
+    writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        print(f"[ERR] writer 열기 실패: {out_path}")
+        cap.release()
+        return
 
-    print(f"처리 중: {video_path}")
-    print(f"총 프레임: {total}, FPS: {fps}")
-    
-    last_helmet_by_id = {}
+    # --- 헬멧 설정 ---
+    h_min_conf        = max(0.0, float(HELMET_CONFIG.get("conf_thresh", 0.25)))
+    helmet_label      = str(HELMET_CONFIG.get("label_name", "")).strip()
+    h_min_short_side  = int(HELMET_CONFIG.get("min_short_side", 640))
+    h_carry_ttl       = int(HELMET_CONFIG.get("carry_ttl", 60))
+    h_top_ratio       = float(HELMET_CONFIG.get("top_ratio", 0.60))
 
-    frames_with_detection = 0
+    # --- 조끼 설정 ---
+    v_post_conf       = float(VEST_CONFIG.get("post_conf_thr", 0.60))
+    v_min_short_side  = int(VEST_CONFIG.get("min_short_side", 640))
+    v_ratio_thr       = float(VEST_CONFIG.get("ratio_thr", 0.02))
+    v_area_min_frac   = float(VEST_CONFIG.get("area_min_frac", 0.002))
+    v_area_max_frac   = float(VEST_CONFIG.get("area_max_frac", 0.25))
+    v_aspect_min      = float(VEST_CONFIG.get("aspect_min", 0.35))
+    v_aspect_max      = float(VEST_CONFIG.get("aspect_max", 2.20))
+    v_torso_low       = float(VEST_CONFIG.get("torso_low", 0.20))
+    v_torso_high      = float(VEST_CONFIG.get("torso_high", 0.80))
+    v_carry_ttl       = int(VEST_CONFIG.get("carry_ttl", 60))
+
+    # 라벨 필터 전략: 공백/any면 해제, 아니면 유사어 리스트 사용
+    vest_label_cfg = str(VEST_CONFIG.get("label_name", "")).strip().lower()
+    if vest_label_cfg in ("", "any", "all", "*"):
+        vest_label_for_call = ""  # 필터 해제
+    else:
+        vest_label_for_call = ["vest", "safety-vest", "safetyvest",
+                               "hi-vis", "high-visibility-vest", "reflective-vest"]
+
     frame_idx = 0
+    kept_people_frames = 0
     t0 = time.time()
+
+    last_helmet_by_id: Dict[int, Tuple[Optional[bool], int]] = {}
+    last_vest_by_id:   Dict[int, Tuple[Optional[bool], int]] = {}
 
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         frame_idx += 1
+        if frame_idx > max_frames:
+            break
 
-        #1) 사람 트래킹
+        # 1) 사람 트래킹(+키포인트)
         det = tracker.track_frame(frame)
         xyxys, scores, ids = det["xyxys"], det["scores"], det["ids"]
         kpt_xy, kpt_conf   = det["kpt_xy"], det["kpt_conf"]
-
-        frame_has_detection = False
         N = xyxys.shape[0]
-        
-        #2) helmet Detection
-       # 2) Helmet Detection
-        want_infer = (frame_idx % helmet_every == 0)
-        ran_infer  = False
-        helmet_boxes = None
+        frame_has_detection = False
 
-        if want_infer:
+        # 2) 헬멧 (샘플링)
+        helmet_boxes = None
+        ran_helmet = (frame_idx % max(1, helmet_every) == 0)
+        if ran_helmet:
             try:
                 helmet_boxes = infer_helmet_boxes(
-                    helmet_client, frame, helmet_label_name,
-                    min_conf=helmet_conf, min_short_side=helmet_min_ss
+                    helmet_client, frame, helmet_label,
+                    min_conf=h_min_conf, min_short_side=h_min_short_side
                 )
-                ran_infer = True
-                print(f"[Frame {frame_idx}] Helmet detection 실행 → 결과 {len(helmet_boxes)}개")
             except Exception as e:
-                # ★ 여기서 절대 크래시하지 않음: carry 로 대체
-                print(f"[Frame {frame_idx}] Helmet detection 실패: {type(e).__name__}: {e}")
-                helmet_boxes = None  # 아래에서 carry 사용
-        else:
-            print(f"[Frame {frame_idx}] Helmet detection SKIP (carry 사용)")
+                print(f"[Frame {frame_idx}] Helmet API 실패: {type(e).__name__}: {e}")
 
+        # 3) 조끼 (샘플링)
+        kept_vests: List[Tuple[list, float, float]] = []
+        ran_vest = (frame_idx % max(1, vest_every) == 0)
+        dbg = {"raw":0,"geom":0,"color":0,"gate":0,"kept":0}
+        if ran_vest:
+            try:
+                raw_vests = infer_vest_boxes(
+                    vest_client, frame,
+                    model_id=VEST_CONFIG["model_id"],
+                    label_name=vest_label_for_call,
+                    post_conf_thr=v_post_conf,
+                    min_short_side=v_min_short_side
+                )
+                dbg["raw"] = len(raw_vests)
 
+                person_boxes = [(xyxys[i].tolist(), float(scores[i])) for i in range(N)]
+                H, W = frame.shape[:2]
+                for (vxyxy, vconf, _c) in raw_vests:
+                    x1,y1,x2,y2 = map(int, vxyxy)
+                    okg, _ = geom_ok(x1,y1,x2,y2, W,H,
+                                     area_min_frac=v_area_min_frac,
+                                     area_max_frac=v_area_max_frac,
+                                     aspect_min=v_aspect_min,
+                                     aspect_max=v_aspect_max)
+                    if not okg:
+                        continue
+                    dbg["geom"] += 1
+
+                    roi = frame[y1:y2, x1:x2]
+                    ratio, _ = vest_color_ratio(roi)
+                    if ratio < v_ratio_thr:
+                        continue
+                    dbg["color"] += 1
+
+                    if not center_in_person_torso(x1,y1,x2,y2, person_boxes, v_torso_low, v_torso_high):
+                        continue
+                    dbg["gate"] += 1
+
+                    kept_vests.append(([x1,y1,x2,y2], vconf, ratio))
+                    dbg["kept"] += 1
+            except Exception as e:
+                print(f"[Frame {frame_idx}] Vest API 실패: {type(e).__name__}: {e}")
+
+            print(f"[F{frame_idx}] vest raw={dbg['raw']} geom={dbg['geom']} color={dbg['color']} gate={dbg['gate']} kept={dbg['kept']}")
+
+        # 4) 사람별 판정/그리기/로깅
         for i in range(N):
-            this_kp_xy   = kpt_xy[i]   if kpt_xy   is not None and i < kpt_xy.shape[0]   else None
-            this_kp_conf = kpt_conf[i] if kpt_conf is not None and i < kpt_conf.shape[0] else None
-            this_id      = int(ids[i]) if ids is not None and i < len(ids)              else None
+            this_kp_xy   = kpt_xy[i]   if (kpt_xy is not None and i < kpt_xy.shape[0])   else None
+            this_kp_conf = kpt_conf[i] if (kpt_conf is not None and i < kpt_conf.shape[0]) else None
+            this_id      = int(ids[i]) if (ids is not None and i < len(ids)) else None
 
             if person_visible(this_kp_xy, this_kp_conf, KPT_CONF):
                 frame_has_detection = True
                 part_text = get_person_part(this_kp_xy, this_kp_conf, KPT_CONF)
 
-                # 3) 매칭 or carry
+                # Helmet carry
                 has_helmet = None
-                if ran_infer:
-                    # 새로 감지 → 캐시에 저장
-                    has_helmet, helmet_score = person_has_helmet(
-                        xyxys[i].tolist(), helmet_boxes, top_ratio=0.45, iou_thr=0.05
-                    )
+                if ran_helmet:
+                    try:
+                        if helmet_boxes and len(helmet_boxes) > 0:
+                            has_helmet, _ = person_has_helmet(
+                                xyxys[i].tolist(), helmet_boxes,
+                                top_ratio=h_top_ratio, iou_thr=0.03
+                            )
+                        else:
+                            has_helmet = None
+                    except Exception as e:
+                        print(f"[Frame {frame_idx}] Helmet match 실패: {type(e).__name__}: {e}")
+                        has_helmet = None
                     if this_id is not None:
                         last_helmet_by_id[this_id] = (has_helmet, frame_idx)
                 else:
-                    # 감지 스킵/실패 → 최근 상태 carry (TTL 내)
                     if this_id is not None and this_id in last_helmet_by_id:
                         state, seen_at = last_helmet_by_id[this_id]
-                        if (carry_ttl is None) or ((frame_idx - seen_at) <= carry_ttl):
-                            has_helmet = state  # ← 유지
+                        if (frame_idx - seen_at) <= h_carry_ttl:
+                            has_helmet = state
 
+                # Vest carry + 매칭
+                has_vest = None
+                vest_best_conf, vest_best_ratio = None, None
+                if ran_vest:
+                    if kept_vests:
+                        v_found, v_conf, v_ratio = match_vest_to_person(
+                            xyxys[i].tolist(), kept_vests,
+                            torso_low=v_torso_low, torso_high=v_torso_high, iou_thr=0.05
+                        )
+                        if v_found:
+                            has_vest = True
+                            vest_best_conf, vest_best_ratio = v_conf, v_ratio
+                        else:
+                            has_vest = False  # 후보는 있었는데 내 몸통에 매칭 실패 → NO-VEST
+                    else:
+                        has_vest = False      # 프레임 내 조끼 후보 자체가 없으면 NO-VEST로 표기
+                    if this_id is not None:
+                        last_vest_by_id[this_id] = (has_vest, frame_idx)
+                else:
+                    if this_id is not None and this_id in last_vest_by_id:
+                        state, seen_at = last_vest_by_id[this_id]
+                        if (frame_idx - seen_at) <= v_carry_ttl:
+                            has_vest = state
+
+                # 시각화 (people_detection_copy의 violation-first 규칙 사용)
                 draw_person(
-                    frame, xyxys[i], this_id,
-                    this_kp_xy, this_kp_conf,
-                    helmet=has_helmet
-                )
-                
-                # JSONL 기록: 유지된 값이 있으면 True/False로 기록, 없으면 "Skip"
-                helmet_json = (
-                    "True" if has_helmet is True else
-                    "False" if has_helmet is False else
-                    "Skip"
+                    frame,
+                    xyxys[i],
+                    track_id=this_id,
+                    kpt_xy=this_kp_xy,
+                    kpt_conf=this_kp_conf,
+                    helmet=has_helmet,
+                    vest=has_vest,
+                    part_text=part_text
                 )
 
+                # JSONL 로깅
                 row = {
                     "video_path": os.path.abspath(video_path),
                     "frame_number": frame_idx,
                     "track_id": this_id,
-                    "helmet": helmet_json,   # "True" or "False" or "Skip"
-                    "body part": part_text
+                    "helmet": ("True" if has_helmet is True else "False" if has_helmet is False else "Skip"),
+                    "vest":   ("True" if has_vest   is True else "False" if has_vest   is False else "Skip"),
+                    "vest_conf": (None if vest_best_conf  is None else round(float(vest_best_conf), 6)),
+                    "vest_color_ratio": (None if vest_best_ratio is None else round(float(vest_best_ratio), 6)),
+                    "body_part": part_text
                 }
-                jsonl_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+                jf.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        # (선택) 조끼 박스 시각화: 디버깅용
+        for (vx1, vy1, vx2, vy2), vconf, vratio in kept_vests:
+            cv2.rectangle(frame, (vx1, vy1), (vx2, vy2), (0, 200, 255), 2)
+            label = f"vest {vconf:.2f} r={vratio:.3f}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(frame, (vx1, max(0, vy1 - th - 6)), (vx1 + tw + 6, vy1), (0, 200, 255), -1)
+            cv2.putText(frame, label, (vx1 + 3, max(0, vy1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
         if frame_has_detection:
-            frames_with_detection += 1
+            kept_people_frames += 1
 
         writer.write(frame)
-
-        if total > 0 and frame_idx % 30 == 0:
-            print(f"진행률: {frame_idx/total*100:.1f}% ({frame_idx}/{total})")
 
     cap.release()
     writer.release()
 
     dt = time.time() - t0
+    print(f"[DONE] {base}: frames={min(frame_idx, max_frames)}, kept_people_frames={kept_people_frames}, fps_proc={frame_idx/max(1e-6, dt):.2f}")
+    print(f"[SAVE] video -> {out_path}]")
 
-    print(f"완료: {video_path}  |  유효프레임: {frames_with_detection}/{frame_idx}  |  저장: {out_path}  |  {frame_idx/dt:.2f} FPS(처리)")
+# ------------------ 전체 실행 ------------------
+def quick_e2e_all(max_frames_per_video: int = 120):
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(os.path.join(OUT_DIR, "video"), exist_ok=True)
 
-def main():
-    jsonl_path = os.path.join(OUT_DIR, "detections.jsonl")
+    # 비디오 수집
+    video_paths: List[str] = []
+    for ext in ("*.mp4", "*.mov", "*.avi", "*.wmv", "*.mkv", "*.m4v"):
+        video_paths += glob.glob(os.path.join(VIDEO_DIR, "**", ext), recursive=True)
+    video_paths = sorted(set(video_paths))
+    if not video_paths:
+        raise RuntimeError(f"[ERR] VIDEO_DIR에 비디오 없음: {VIDEO_DIR}")
 
-    # 모델 로드
-    model = YOLO(MODEL_PATH)  
+    print(f"[INFO] 총 {len(video_paths)}개 비디오 발견", flush=True)
 
-    # 트래커 래퍼
-    tracker = Tracker(
-        model=model,
-        tracker_name=TRACKER_YAML,  
-        img_size=IMG_SIZE,
-        det_conf=DET_CONF,
-        device=DEVICE
-    )
+    # YOLO + Tracker
+    print("[INIT] YOLO 로드 중...", flush=True)
+    model = YOLO(MODEL_PATH)
+    tracker = Tracker(model=model, tracker_name=TRACKER_YAML, img_size=IMG_SIZE, det_conf=DET_CONF, device=DEVICE)
+    print("[INIT] YOLO/Tracker 준비 완료", flush=True)
 
-    # 헬멧
-    helmet_min_conf = 0.55
+    # Helmet Client
     helmet_client = make_helmet_client(
         api_url=HELMET_CONFIG["api_url"],
         api_key=HELMET_CONFIG["api_key"],
-        min_conf=helmet_min_conf,
-        iou_thresh=HELMET_CONFIG["iou_thresh"],
+        min_conf=float(HELMET_CONFIG.get("conf_thresh", 0.25)),
+        iou_thresh=float(HELMET_CONFIG.get("iou_thresh", 0.5)),
         model_id=HELMET_CONFIG["model_id"]
     )
-    helmet_label_name = str(HELMET_CONFIG["label_name"]).strip()
+    helmet_every = int(HELMET_CONFIG.get("every", 15))
 
-    # 비디오 수집
-    video_paths = []
-    for ext in ("*.mp4", "*.mov", "*.avi", "*.wmv", "*.mkv"):
-        video_paths.extend(glob.glob(os.path.join(VIDEO_DIR, ext)))
-    video_paths.sort()
+    # Vest Client
+    vest_client = make_vest_client(
+        api_url=VEST_CONFIG["api_url"],
+        api_key=VEST_CONFIG["api_key"],
+        conf_thresh=float(VEST_CONFIG.get("conf_thresh", 0.25)),
+        iou_thresh=float(VEST_CONFIG.get("iou_thresh", 0.5)),
+    )
+    vest_every = int(VEST_CONFIG.get("every", 15))
 
+    # 통합 JSONL
+    jsonl_path = os.path.join(OUT_DIR, "quick_test_all.jsonl")
     with open(jsonl_path, "w", encoding="utf-8") as jf:
-        for vp in video_paths:
-            process_video(
-                vp, tracker, jf,
-                helmet_client=helmet_client,
-                helmet_label_name=helmet_label_name,
-                helmet_conf=helmet_min_conf,
-                helmet_min_ss=640,
-            )
-            
-    print(f"JSONL 파일: {jsonl_path}")
+        for idx, vp in enumerate(video_paths, 1):
+            print(f"\n[{idx}/{len(video_paths)}] 처리 시작: {vp}", flush=True)
+            try:
+                process_one_video(
+                    video_path=vp, jf=jf, model=model, tracker=tracker,
+                    helmet_client=helmet_client, vest_client=vest_client,
+                    max_frames=max_frames_per_video,
+                    helmet_every=helmet_every, vest_every=vest_every
+                )
+            except Exception as e:
+                print(f"[ERROR] {vp}: {type(e).__name__}: {e}")
+                continue
+
+    print(f"\n[ALL DONE] JSONL -> {jsonl_path}")
 
 if __name__ == "__main__":
-    main()
+    quick_e2e_all(max_frames_per_video=120)
