@@ -24,6 +24,40 @@ from vest_detection import (
     geom_ok, center_in_person_torso, match_vest_to_person
 )
 
+# ------------------ 추가: 라벨/박스 유틸 & 하네스 alias ------------------
+HARNESS_ALIASES = {
+    "harness", "safety-harness", "body-harness", "safetyharness",
+    "fall-arrest-harness", "fullbody-harness", "full-body-harness",
+    "belt-harness"
+}
+
+def _norm_label(s: str) -> str:
+    return str(s).strip().lower().replace("_", "-").replace(" ", "")
+
+def _norm_triplets(boxes, default_cls: str = "") -> List[Tuple[list, float, str]]:
+    """
+    다양한 응답 포맷을 (xyxy, conf, class)로 표준화.
+    - (xyxy, conf) 또는 (xyxy, conf, class) 또는 dict 지원.
+    """
+    out: List[Tuple[list, float, str]] = []
+    if not boxes:
+        return out
+    for b in boxes:
+        if isinstance(b, dict):
+            xyxy = b.get("xyxy") or b.get("bbox") or b.get("box")
+            conf = b.get("confidence") or b.get("conf") or b.get("score") or 0.0
+            cls  = b.get("class") or b.get("class_name") or default_cls
+            if xyxy is not None:
+                out.append((list(map(float, xyxy)), float(conf), str(cls)))
+        elif isinstance(b, (list, tuple)):
+            if len(b) == 3:
+                xyxy, conf, cls = b
+                out.append((list(map(float, xyxy)), float(conf), str(cls)))
+            elif len(b) == 2:
+                xyxy, conf = b
+                out.append((list(map(float, xyxy)), float(conf), str(default_cls)))
+    return out
+
 # ------------------ 한 비디오 처리 ------------------
 def process_one_video(video_path: str,
                       jf,
@@ -73,17 +107,30 @@ def process_one_video(video_path: str,
     v_torso_high      = float(VEST_CONFIG.get("torso_high", 0.80))
     v_carry_ttl       = int(VEST_CONFIG.get("carry_ttl", 60))
 
-    # 라벨 필터 전략: 공백/any면 해제, 아니면 유사어 리스트 사용
+    # 라벨 필터 전략 (하네스 포함)
     vest_label_cfg = str(VEST_CONFIG.get("label_name", "")).strip().lower()
     if vest_label_cfg in ("", "any", "all", "*"):
-        vest_label_for_call = ""  # 필터 해제
+        vest_label_for_call = ""  # 필터 해제(서버가 아는 모든 'vest/harness' 반환)
     else:
-        vest_label_for_call = ["vest", "safety-vest", "safetyvest",
-                               "hi-vis", "high-visibility-vest", "reflective-vest"]
+        vest_label_for_call = [
+            "vest", "safety-vest", "safetyvest",
+            "hi-vis", "high-visibility-vest", "reflective-vest",
+            # harness 계열도 조끼로 취급
+            "harness", "safety-harness", "body-harness", "safetyharness",
+            "fall-arrest-harness", "full-body-harness"
+        ]
 
     frame_idx = 0
     kept_people_frames = 0
     t0 = time.time()
+
+    # ---- FPS/지연 오버레이용 상태 ----
+    ema = None
+    t_prev = time.time()
+    last_helmet_frame = -1
+    last_vest_frame   = -1
+    last_helmet_ms: Optional[float] = None
+    last_vest_ms:   Optional[float] = None
 
     last_helmet_by_id: Dict[int, Tuple[Optional[bool], int]] = {}
     last_vest_by_id:   Dict[int, Tuple[Optional[bool], int]] = {}
@@ -108,10 +155,17 @@ def process_one_video(video_path: str,
         ran_helmet = (frame_idx % max(1, helmet_every) == 0)
         if ran_helmet:
             try:
+                t0h = time.time()
                 helmet_boxes = infer_helmet_boxes(
                     helmet_client, frame, helmet_label,
                     min_conf=h_min_conf, min_short_side=h_min_short_side
                 )
+                # 표준화: (xyxy, conf, class)
+                helmet_boxes = _norm_triplets(helmet_boxes, default_cls="helmet")
+                last_helmet_ms = (time.time() - t0h) * 1000.0
+                last_helmet_frame = frame_idx
+                cnt_h = 0 if helmet_boxes is None else len(helmet_boxes)
+                print(f"[F{frame_idx}] helmet: n={cnt_h} {last_helmet_ms:.1f}ms")
             except Exception as e:
                 print(f"[Frame {frame_idx}] Helmet API 실패: {type(e).__name__}: {e}")
 
@@ -121,6 +175,7 @@ def process_one_video(video_path: str,
         dbg = {"raw":0,"geom":0,"color":0,"gate":0,"kept":0}
         if ran_vest:
             try:
+                t0v = time.time()
                 raw_vests = infer_vest_boxes(
                     vest_client, frame,
                     model_id=VEST_CONFIG["model_id"],
@@ -128,11 +183,16 @@ def process_one_video(video_path: str,
                     post_conf_thr=v_post_conf,
                     min_short_side=v_min_short_side
                 )
+                # 표준화: (xyxy, conf, class)
+                raw_vests = _norm_triplets(raw_vests, default_cls="vest")
+
+                last_vest_ms = (time.time() - t0v) * 1000.0
+                last_vest_frame = frame_idx
                 dbg["raw"] = len(raw_vests)
 
                 person_boxes = [(xyxys[i].tolist(), float(scores[i])) for i in range(N)]
                 H, W = frame.shape[:2]
-                for (vxyxy, vconf, _c) in raw_vests:
+                for (vxyxy, vconf, vcls) in raw_vests:
                     x1,y1,x2,y2 = map(int, vxyxy)
                     okg, _ = geom_ok(x1,y1,x2,y2, W,H,
                                      area_min_frac=v_area_min_frac,
@@ -145,7 +205,10 @@ def process_one_video(video_path: str,
 
                     roi = frame[y1:y2, x1:x2]
                     ratio, _ = vest_color_ratio(roi)
-                    if ratio < v_ratio_thr:
+
+                    # 하네스는 Hi-Vis 색상이 아닐 수 있음 → 색 비율 필터 우회
+                    is_harness = ("harness" in _norm_label(vcls)) or (_norm_label(vcls) in HARNESS_ALIASES)
+                    if (not is_harness) and (ratio < v_ratio_thr):
                         continue
                     dbg["color"] += 1
 
@@ -158,7 +221,7 @@ def process_one_video(video_path: str,
             except Exception as e:
                 print(f"[Frame {frame_idx}] Vest API 실패: {type(e).__name__}: {e}")
 
-            print(f"[F{frame_idx}] vest raw={dbg['raw']} geom={dbg['geom']} color={dbg['color']} gate={dbg['gate']} kept={dbg['kept']}")
+            print(f"[F{frame_idx}] vest raw={dbg['raw']} geom={dbg['geom']} color={dbg['color']} gate={dbg['gate']} kept={dbg['kept']}  {last_vest_ms:.1f}ms")
 
         # 4) 사람별 판정/그리기/로깅
         for i in range(N):
@@ -216,7 +279,7 @@ def process_one_video(video_path: str,
                         if (frame_idx - seen_at) <= v_carry_ttl:
                             has_vest = state
 
-                # 시각화 (people_detection_copy의 violation-first 규칙 사용)
+                # 시각화
                 draw_person(
                     frame,
                     xyxys[i],
@@ -241,14 +304,19 @@ def process_one_video(video_path: str,
                 }
                 jf.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-        # (선택) 조끼 박스 시각화: 디버깅용
-        for (vx1, vy1, vx2, vy2), vconf, vratio in kept_vests:
-            cv2.rectangle(frame, (vx1, vy1), (vx2, vy2), (0, 200, 255), 2)
-            label = f"vest {vconf:.2f} r={vratio:.3f}"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (vx1, max(0, vy1 - th - 6)), (vx1 + tw + 6, vy1), (0, 200, 255), -1)
-            cv2.putText(frame, label, (vx1 + 3, max(0, vy1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        # ---- 오버레이: procFPS + H/V Δ 및 지연(ms) ----
+        t_now = time.time()
+        inst = 1.0 / max(1e-6, (t_now - t_prev))
+        ema = inst if ema is None else (0.9 * ema + 0.1 * inst)
+        t_prev = t_now
+
+        h_delta = (frame_idx - last_helmet_frame) if last_helmet_frame >= 0 else -1
+        v_delta = (frame_idx - last_vest_frame)   if last_vest_frame   >= 0 else -1
+        h_ms_txt = f"{last_helmet_ms:.0f}ms" if last_helmet_ms is not None else "--"
+        v_ms_txt = f"{last_vest_ms:.0f}ms"   if last_vest_ms   is not None else "--"
+
+        text = f"procFPS:{ema:.2f}  F:{frame_idx}  HΔ:{h_delta} H:{h_ms_txt}  VΔ:{v_delta} V:{v_ms_txt}"
+        cv2.putText(frame, text, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 220, 20), 2)
 
         if frame_has_detection:
             kept_people_frames += 1
@@ -260,7 +328,7 @@ def process_one_video(video_path: str,
 
     dt = time.time() - t0
     print(f"[DONE] {base}: frames={min(frame_idx, max_frames)}, kept_people_frames={kept_people_frames}, fps_proc={frame_idx/max(1e-6, dt):.2f}")
-    print(f"[SAVE] video -> {out_path}]")
+    print(f"[SAVE] video -> {out_path}")
 
 # ------------------ 전체 실행 ------------------
 def quick_e2e_all(max_frames_per_video: int = 120):
