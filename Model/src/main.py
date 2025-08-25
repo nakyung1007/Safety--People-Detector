@@ -24,39 +24,30 @@ from vest_detection import (
     geom_ok, center_in_person_torso, match_vest_to_person
 )
 
-# ------------------ 추가: 라벨/박스 유틸 & 하네스 alias ------------------
-HARNESS_ALIASES = {
-    "harness", "safety-harness", "body-harness", "safetyharness",
-    "fall-arrest-harness", "fullbody-harness", "full-body-harness",
-    "belt-harness"
-}
-
-def _norm_label(s: str) -> str:
-    return str(s).strip().lower().replace("_", "-").replace(" ", "")
-
-def _norm_triplets(boxes, default_cls: str = "") -> List[Tuple[list, float, str]]:
+# ------------------ 유틸: 헬멧 포맷 정규화 ------------------
+def _to_pairs_for_helmet(boxes) -> List[Tuple[list, float]]:
     """
-    다양한 응답 포맷을 (xyxy, conf, class)로 표준화.
-    - (xyxy, conf) 또는 (xyxy, conf, class) 또는 dict 지원.
+    person_has_helmet()이 (xyxy, conf)만 받는 경우가 있어
+    (xyxy, conf, class) 또는 dict 응답을 (xyxy, conf)로 변환.
     """
-    out: List[Tuple[list, float, str]] = []
+    out: List[Tuple[list, float]] = []
     if not boxes:
         return out
     for b in boxes:
         if isinstance(b, dict):
             xyxy = b.get("xyxy") or b.get("bbox") or b.get("box")
             conf = b.get("confidence") or b.get("conf") or b.get("score") or 0.0
-            cls  = b.get("class") or b.get("class_name") or default_cls
             if xyxy is not None:
-                out.append((list(map(float, xyxy)), float(conf), str(cls)))
+                out.append((list(map(float, xyxy)), float(conf)))
         elif isinstance(b, (list, tuple)):
             if len(b) == 3:
-                xyxy, conf, cls = b
-                out.append((list(map(float, xyxy)), float(conf), str(cls)))
+                xyxy, conf, _cls = b
+                out.append((list(map(float, xyxy)), float(conf)))
             elif len(b) == 2:
                 xyxy, conf = b
-                out.append((list(map(float, xyxy)), float(conf), str(default_cls)))
+                out.append((list(map(float, xyxy)), float(conf)))
     return out
+
 
 # ------------------ 한 비디오 처리 ------------------
 def process_one_video(video_path: str,
@@ -107,18 +98,13 @@ def process_one_video(video_path: str,
     v_torso_high      = float(VEST_CONFIG.get("torso_high", 0.80))
     v_carry_ttl       = int(VEST_CONFIG.get("carry_ttl", 60))
 
-    # 라벨 필터 전략 (하네스 포함)
+    # 라벨 필터 전략
     vest_label_cfg = str(VEST_CONFIG.get("label_name", "")).strip().lower()
     if vest_label_cfg in ("", "any", "all", "*"):
-        vest_label_for_call = ""  # 필터 해제(서버가 아는 모든 'vest/harness' 반환)
+        vest_label_for_call = ""  # 필터 해제
     else:
-        vest_label_for_call = [
-            "vest", "safety-vest", "safetyvest",
-            "hi-vis", "high-visibility-vest", "reflective-vest",
-            # harness 계열도 조끼로 취급
-            "harness", "safety-harness", "body-harness", "safetyharness",
-            "fall-arrest-harness", "full-body-harness"
-        ]
+        vest_label_for_call = ["vest", "safety-vest", "safetyvest",
+                               "hi-vis", "high-visibility-vest", "reflective-vest", "harness"]
 
     frame_idx = 0
     kept_people_frames = 0
@@ -160,8 +146,6 @@ def process_one_video(video_path: str,
                     helmet_client, frame, helmet_label,
                     min_conf=h_min_conf, min_short_side=h_min_short_side
                 )
-                # 표준화: (xyxy, conf, class)
-                helmet_boxes = _norm_triplets(helmet_boxes, default_cls="helmet")
                 last_helmet_ms = (time.time() - t0h) * 1000.0
                 last_helmet_frame = frame_idx
                 cnt_h = 0 if helmet_boxes is None else len(helmet_boxes)
@@ -183,9 +167,6 @@ def process_one_video(video_path: str,
                     post_conf_thr=v_post_conf,
                     min_short_side=v_min_short_side
                 )
-                # 표준화: (xyxy, conf, class)
-                raw_vests = _norm_triplets(raw_vests, default_cls="vest")
-
                 last_vest_ms = (time.time() - t0v) * 1000.0
                 last_vest_frame = frame_idx
                 dbg["raw"] = len(raw_vests)
@@ -203,11 +184,12 @@ def process_one_video(video_path: str,
                         continue
                     dbg["geom"] += 1
 
+                    # 하네스면 색 비율 체크 패스
+                    vcls_str = str(vcls).lower() if vcls is not None else ""
+                    is_harness = ("harness" in vcls_str)
+
                     roi = frame[y1:y2, x1:x2]
                     ratio, _ = vest_color_ratio(roi)
-
-                    # 하네스는 Hi-Vis 색상이 아닐 수 있음 → 색 비율 필터 우회
-                    is_harness = ("harness" in _norm_label(vcls)) or (_norm_label(vcls) in HARNESS_ALIASES)
                     if (not is_harness) and (ratio < v_ratio_thr):
                         continue
                     dbg["color"] += 1
@@ -238,8 +220,10 @@ def process_one_video(video_path: str,
                 if ran_helmet:
                     try:
                         if helmet_boxes and len(helmet_boxes) > 0:
+                            # ★ person_has_helmet이 기대하는 (xyxy, conf) 포맷으로 변환
+                            hb2 = _to_pairs_for_helmet(helmet_boxes)
                             has_helmet, _ = person_has_helmet(
-                                xyxys[i].tolist(), helmet_boxes,
+                                xyxys[i].tolist(), hb2,
                                 top_ratio=h_top_ratio, iou_thr=0.03
                             )
                         else:
