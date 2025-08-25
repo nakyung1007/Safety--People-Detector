@@ -1,6 +1,10 @@
 # 데이터 파일
 Data/Images/
 Data/Video/
+Data/videos/
+Data/output/logs/
+Data/output/crops/
+Data/output/videos/
 Data/output/video/
 Data/Real/
 Data/output/gridcam_frames/
@@ -9,10 +13,10 @@ Data/output/bbox_crops/
 # Model 가중치 파일
 Model/checkpoints/
 Model/src/trackers/
+Model/yolo/__pycache__/
 
 # 가상화면
 env/
-
 
 #config
 config.py
