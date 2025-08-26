@@ -202,6 +202,10 @@ def process_video(
                     ppe_states[person_id] = {
                         'helmet': person_data['helmet'],
                         'vest': person_data['vest'],
+                        'helmet_bbox': person_data['helmet_bbox'],
+                        'helmet_score': person_data['helmet_score'],
+                        'vest_bbox': person_data['vest_bbox'],
+                        'vest_score': person_data['vest_score'],
                         'last_updated': frame_idx
                     }
         processing_metrics["ppe_detection_time"] += time.time() - ppe_start
@@ -261,12 +265,13 @@ def process_video(
             vest_score = "None"
             
             if person_id is not None and person_id in ppe_states:
-                if 'helmet' in ppe_states[person_id] and ppe_states[person_id]['helmet'] is not None:
-                    helmet_bbox = json.dumps(ppe_states[person_id].get('helmet_bbox', []))
-                    helmet_score = f"{ppe_states[person_id].get('helmet_score', 0.0):.4f}"
-                if 'vest' in ppe_states[person_id] and ppe_states[person_id]['vest'] is not None:
-                    vest_bbox = json.dumps(ppe_states[person_id].get('vest_bbox', []))
-                    vest_score = f"{ppe_states[person_id].get('vest_score', 0.0):.4f}"
+                ppe_state = ppe_states[person_id]
+                if ppe_state['helmet_bbox'] is not None:
+                    helmet_bbox = json.dumps(ppe_state['helmet_bbox'])
+                    helmet_score = f"{ppe_state['helmet_score']:.4f}"
+                if ppe_state['vest_bbox'] is not None:
+                    vest_bbox = json.dumps(ppe_state['vest_bbox'])
+                    vest_score = f"{ppe_state['vest_score']:.4f}"
             
             csv_w.writerow([
                 video_path.stem,  # 비디오 이름 추가
