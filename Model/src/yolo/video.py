@@ -24,6 +24,7 @@ from ultralytics import YOLO
 import os, sys
 import time
 import logging
+import json
 from collections import deque
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -90,6 +91,7 @@ def process_video(
     out_videos_dir: Path,
     out_crops_root: Path,
     out_logs_dir: Path,
+    combined_csv_path: Path,  # 공통 CSV 파일 경로
     pose_ckpt: Path,
     ppe_ckpt: Path,
     tracker_yaml: str,
@@ -122,11 +124,13 @@ def process_video(
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     video_writer = cv2.VideoWriter(str(out_mp4), fourcc, fps, (W, H))
 
-    # 로그 CSV
-    csv_path = out_logs_dir / f"{video_path.stem}_tracks.csv"
-    csv_f = open(csv_path, "w", newline="", encoding="utf-8")
+    # 로그 CSV 초기화
+    write_header = not combined_csv_path.exists()
+    csv_f = open(combined_csv_path, "a", newline="", encoding="utf-8")  # append 모드로 열기
     csv_w = csv.writer(csv_f)
-    csv_w.writerow(["frame", "id", "x1", "y1", "x2", "y2", "score", "helmet", "vest", "part"])
+    if write_header:
+        csv_w.writerow(["video_name", "frame", "id", "x1", "y1", "x2", "y2", "score", "helmet", "vest", "part", 
+                       "helmet_bbox", "helmet_score", "vest_bbox", "vest_score"])  # 추가된 컬럼
 
     # 모델 로드 (CPU 전용)
     pose_model = YOLO(str(pose_ckpt))
@@ -249,13 +253,33 @@ def process_video(
             # CSV 로그
             x1, y1, x2, y2 = map(int, pbox)
             part = get_person_part(kxy, kcf, kpt_thr) if (kxy is not None and kcf is not None) else "unknown"
+            
+            # PPE 검출 정보 추출
+            helmet_bbox = "None"
+            helmet_score = "None"
+            vest_bbox = "None"
+            vest_score = "None"
+            
+            if person_id is not None and person_id in ppe_states:
+                if 'helmet' in ppe_states[person_id] and ppe_states[person_id]['helmet'] is not None:
+                    helmet_bbox = json.dumps(ppe_states[person_id].get('helmet_bbox', []))
+                    helmet_score = f"{ppe_states[person_id].get('helmet_score', 0.0):.4f}"
+                if 'vest' in ppe_states[person_id] and ppe_states[person_id]['vest'] is not None:
+                    vest_bbox = json.dumps(ppe_states[person_id].get('vest_bbox', []))
+                    vest_score = f"{ppe_states[person_id].get('vest_score', 0.0):.4f}"
+            
             csv_w.writerow([
+                video_path.stem,  # 비디오 이름 추가
                 frame_idx, pid if pid is not None else -1,
                 x1, y1, x2, y2,
                 f"{score:.4f}",
                 ("True" if helmet is True else ("False" if helmet is False else "None")),
                 ("True" if vest   is True else ("False" if vest   is False else "None")),
-                part
+                part,
+                helmet_bbox,
+                helmet_score,
+                vest_bbox,
+                vest_score
             ])
 
         # 출력 프레임 기록
@@ -333,6 +357,17 @@ def process_folder():
     out_crops_root = out_root / "crops"
     out_logs_dir   = out_root / "logs"
 
+    # 전체 결과를 저장할 CSV 파일 생성
+    out_logs_dir.mkdir(parents=True, exist_ok=True)
+    tracks_csv_path = out_logs_dir / "tracks.csv"
+    perf_csv_path = out_logs_dir / "performance.csv"
+    
+    # tracks.csv가 없을 경우에만 헤더 작성
+    if not tracks_csv_path.exists():
+        with open(tracks_csv_path, "w", newline="", encoding="utf-8") as f:
+            csv_writer = csv.writer(f)
+            csv_writer.writerow(["video_name", "frame", "id", "x1", "y1", "x2", "y2", "score", "helmet", "vest", "part"])
+
     pose_ckpt = _resolve_ckpt(MODEL_PEOPLE_PATH)
     ppe_ckpt  = _resolve_ckpt(MODEL_PPE_PATH)
 
@@ -342,13 +377,16 @@ def process_folder():
         return []
 
     saved_paths: List[Path] = []
+    all_performance_metrics = []
+    
     for vp in videos:
         print(f"[INFO] 처리 중: {vp}")
-        out_mp4 = process_video(
+        out_mp4, perf_metrics = process_video(
             video_path=vp,
             out_videos_dir=out_videos_dir,
             out_crops_root=out_crops_root,
             out_logs_dir=out_logs_dir,
+            combined_csv_path=tracks_csv_path,  # 수정된 부분
             pose_ckpt=pose_ckpt,
             ppe_ckpt=ppe_ckpt,
             tracker_yaml=TRACKER_YAML,
@@ -363,6 +401,20 @@ def process_folder():
         )
         print(f"   -> Saved video: {out_mp4}")
         saved_paths.append(out_mp4)
+        
+        # 성능 메트릭에 비디오 이름 추가
+        perf_metrics['video_name'] = vp.stem
+        all_performance_metrics.append(perf_metrics)
+        
+        # 각 비디오의 성능 메트릭을 performance.csv에 추가
+        write_header = not perf_csv_path.exists()
+        with open(perf_csv_path, "a", newline="", encoding="utf-8") as f:
+            fieldnames = ['video_name'] + list(perf_metrics.keys() - {'video_name'})
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(perf_metrics)
+            
     return saved_paths
 
 if __name__ == "__main__":

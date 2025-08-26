@@ -28,12 +28,14 @@ def run_single(video_path: Path,
     out_videos_dir = out_root / "videos"
     out_crops_root = out_root / "crops"
     out_logs_dir   = out_root / "logs"
+    combined_csv_path = out_logs_dir / "tracks.csv"
 
     saved = process_video(
         video_path=video_path,
         out_videos_dir=out_videos_dir,
         out_crops_root=out_crops_root,
         out_logs_dir=out_logs_dir,
+        combined_csv_path=combined_csv_path,
         pose_ckpt=pose_ckpt,
         ppe_ckpt=ppe_ckpt,
         tracker_yaml=tracker_yaml,
