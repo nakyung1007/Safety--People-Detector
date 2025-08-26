@@ -103,15 +103,30 @@ def assign_ppe_to_person_boxes(ppe_res,
     idx_vest   = [i for i,c in enumerate(clss) if names[c] == "vest"]
     idx_novest = [i for i,c in enumerate(clss) if names[c] == "novest"]
 
+    confs = ppe_res.boxes.conf.cpu().numpy()  # confidence scores 추가
+    
     out = []
     for p in person_xyxys:
+        # 헬멧 검출
+        helmet_matches = [(i, _iou(xyxy[i], p)) for i in idx_hat if _center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr]
         helmet_false = any(_center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr for i in idx_nohat)
-        helmet_true  = any(_center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr for i in idx_hat)
-        helmet = False if helmet_false else (True if helmet_true else None)
-
+        
+        # 조끼 검출
+        vest_matches = [(i, _iou(xyxy[i], p)) for i in idx_vest if _center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr]
         vest_false = any(_center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr for i in idx_novest)
-        vest_true  = any(_center_inside(xyxy[i], p) or _iou(xyxy[i], p) >= iou_thr for i in idx_vest)
-        vest = False if vest_false else (True if vest_true else None)
 
-        out.append({"helmet": helmet, "vest": vest})
+        # 최적의 매칭 찾기
+        best_helmet = max(helmet_matches, key=lambda x: x[1], default=None)
+        best_vest = max(vest_matches, key=lambda x: x[1], default=None)
+
+        # 결과 저장
+        result = {
+            "helmet": False if helmet_false else (True if best_helmet else None),
+            "vest": False if vest_false else (True if best_vest else None),
+            "helmet_bbox": xyxy[best_helmet[0]].tolist() if best_helmet else None,
+            "helmet_score": float(confs[best_helmet[0]]) if best_helmet else None,
+            "vest_bbox": xyxy[best_vest[0]].tolist() if best_vest else None,
+            "vest_score": float(confs[best_vest[0]]) if best_vest else None
+        }
+        out.append(result)
     return out
