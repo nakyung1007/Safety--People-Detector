@@ -7,6 +7,12 @@ NOSE, L_EYE, R_EYE = 0, 1, 2
 L_SHOULDER, R_SHOULDER = 5, 6
 L_ANKLE, R_ANKLE = 15, 16
 
+class Person:
+    def __init__(self, track_id):
+        self.track_id = track_id
+        self.last_part = "unknown"
+        self.part_history = {}
+
 def get_person_part(kpt_xy, kpt_conf, conf_thresh):
     if kpt_xy is None or kpt_conf is None:
         return "unknown"
@@ -30,6 +36,19 @@ def get_person_part(kpt_xy, kpt_conf, conf_thresh):
         return "face"
     else:
         return "None"
+    
+def get_person_part_with_history(kpt_xy, kpt_conf, conf_thresh, person_history: Person):
+    current_part = get_person_part(kpt_xy, kpt_conf, conf_thresh)
+
+    # 이저 프레임과 동일한 신체부위가 감지되면 카운트 증가
+    if current_part == person_history.last_part and current_part not in ["full_body", "unknown", "None"]:
+        person_history.part_history[current_part] = person_history.part_history.get(current_part, 0) + 1
+    else:
+        # 다른 부위가 감지되거나 full_body일 경우 이력 초기화
+        person_history.part_history.clear()
+    
+    person_history.last_part = current_part
+    return current_part, person_history.part_history.get(current_part, 0)
     
 def _ppe_color_and_text(helmet: Optional[bool], vest: Optional[bool]):
     if helmet is None or vest is None:
