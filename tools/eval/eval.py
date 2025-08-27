@@ -18,7 +18,7 @@ import numpy as np
 # ======== 여기를 네 환경에 맞게 바꾸면 인자 없이 실행 가능 ========
 DEFAULT_GT          = r"..\Data\output\quick_test_all.jsonl"        # 또는 .json
 DEFAULT_PRED        = r"C:\path\to\Pred.jsonl"      # 또는 .json
-DEFAULT_OUT         = r""                           # 리포트 저장 경로(비우면 파일 저장 안 함)
+DEFAULT_OUT         = str((Path(__file__).resolve().parent / "reports" / "evaluation.json"))                           # 리포트 저장 경로(비우면 파일 저장 안 함)
 DEFAULT_IOU         = 0.5
 DEFAULT_SKIP_POLICY = "negative"  # "negative" | "ignore"
 # ================================================================
