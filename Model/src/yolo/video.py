@@ -62,7 +62,7 @@ def list_videos_in_dir(video_dir: Path) -> List[Path]:
         vids.extend(video_dir.rglob(f"*{ext}"))
     return sorted(vids)
 
-def safe_crop(bgr: np.ndarray, box_xyxy, pad: float = 0.05, return_rect: bool = False):
+def safe_crop(bgr: np.ndarray, box_xyxy, pad: float = 0.05, return_rect: bool = False, top_pad_pixels: int = 0):
     """
     박스 주변을 살짝 여유(pad 비율) 주고 안전하게 자르기.
     return_rect=True이면 (crop, (x1,y1,x2,y2)) 반환(좌표는 원본 프레임 기준).
@@ -72,6 +72,10 @@ def safe_crop(bgr: np.ndarray, box_xyxy, pad: float = 0.05, return_rect: bool = 
     dw, dh = (x2 - x1), (y2 - y1)
     x1 -= dw * pad; y1 -= dh * pad
     x2 += dw * pad; y2 += dh * pad
+
+    # 상단 패딩은 픽셀 단위로 추가
+    y1 -= (dh * pad + top_pad_pixels) # 기존 패딩에 top_pad_pixels 추가
+
     xi1 = max(0, int(np.floor(x1))); yi1 = max(0, int(np.floor(y1)))
     xi2 = min(w, int(np.ceil(x2)));  yi2 = min(h, int(np.ceil(y2)))
     if xi2 <= xi1 or yi2 <= yi1:
@@ -338,7 +342,11 @@ def process_video(
 
             # ====== 크롭 영상 작성 (얼굴 블러 적용) ======
             if pid is not None:
-                crop, crop_rect = safe_crop(frame, pbox, pad=0.05, return_rect=True)
+                # 텍스트 라벨을 위한 상단 여백 계산
+                top_margin_for_text = 50  # ID, PPE, Part 등 2줄 이상의 텍스트를 위한 충분한 공간 (대략적인 값)
+               
+               # safe_crop 함수 호출 시 top_pad_pixels 인자 전달
+                crop, crop_rect = safe_crop(frame, pbox, pad=0.05, return_rect=True, top_pad_pixels=top_margin_for_text)
 
                 # 얼굴 블러
                 if kxy is not None:
