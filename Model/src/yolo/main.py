@@ -12,6 +12,10 @@ from video import (
     _resolve, _resolve_ckpt             # 경로 보정 유틸( video.py 내부 제공 )
 )
 
+# 추가
+from typing import Dict
+from people_detection import Person, get_person_part_with_history
+
 def run_single(video_path: Path,
                out_root: Path,
                pose_ckpt: Path,
@@ -30,6 +34,9 @@ def run_single(video_path: Path,
     out_logs_dir   = out_root / "logs"
     combined_csv_path = out_logs_dir / "tracks.csv"
 
+    # 추가: 사람 객체 이력을 저장할 딕녀서너리
+    person_history: Dict[int, Person] = {}
+
     saved = process_video(
         video_path=video_path,
         out_videos_dir=out_videos_dir,
@@ -46,7 +53,11 @@ def run_single(video_path: Path,
         device=device,
         iou_thr=iou_thr,
         vid_stride=vid_stride,
-        show=show
+        show=show, 
+
+        # 함수 인자 전달 시 변수명 통일
+        person_history=person_history,
+        get_person_part_with_history=get_person_part_with_history,
     )
     print(f"✅ Saved video: {saved}")
 
