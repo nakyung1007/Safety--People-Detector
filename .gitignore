@@ -9,6 +9,7 @@ Data/output/video/
 Data/Real/
 Data/output/gridcam_frames/
 Data/output/bbox_crops/
+Data/output/image/
 
 # Model 가중치 파일
 Model/checkpoints/
