@@ -203,16 +203,16 @@ def process_video(
             for i, person_data in enumerate(current_ppe_list):
                 if i < len(ids) and ids[i] is not None:
                     person_id = int(ids[i])
-                    # === 오류 수정: .get()을 사용하여 KeyError 방지 ===
+                    # 오류 수정: .get()을 사용하여 KeyError 방지 
                     ppe_states[person_id] = {
                         'helmet': person_data.get('helmet'),
-                        'vest': person_data.get('vest'),
+                        'vest': person_data.get('vest'),\
                         'helmet_bbox': person_data.get('helmet_bbox'),
                         'helmet_score': person_data.get('helmet_score'),
                         'vest_bbox': person_data.get('vest_bbox'),
                         'vest_score': person_data.get('vest_score'),
                         'last_updated': frame_idx
-                    }
+                        }
         processing_metrics["ppe_detection_time"] += time.time() - ppe_start
 
         # 3) 각 person에 대해 가장 최근의 PPE 상태 적용
