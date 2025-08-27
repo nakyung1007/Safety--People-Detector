@@ -16,7 +16,7 @@ VIDEO_DIR 안의 모든 동영상을 처리:
 """
 from __future__ import annotations
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Callable
 import csv
 import cv2
 import numpy as np
@@ -104,6 +104,10 @@ def process_video(
     vid_stride: int = 1,
     ppe_interval: int = 10,  # PPE 탐지 간격 (프레임)
     show: bool = False,
+    
+    # 추가된 인자
+    person_history: Dict[int, Person] = None,
+    get_person_part_with_history: Callable = None,
 ) -> Tuple[Path, Dict]:
     """단일 비디오 처리하고, 주석 오버레이된 mp4 경로 반환."""
     video_path = Path(video_path)
@@ -199,13 +203,14 @@ def process_video(
             for i, person_data in enumerate(current_ppe_list):
                 if i < len(ids) and ids[i] is not None:
                     person_id = int(ids[i])
+                    # === 오류 수정: .get()을 사용하여 KeyError 방지 ===
                     ppe_states[person_id] = {
-                        'helmet': person_data['helmet'],
-                        'vest': person_data['vest'],
-                        'helmet_bbox': person_data['helmet_bbox'],
-                        'helmet_score': person_data['helmet_score'],
-                        'vest_bbox': person_data['vest_bbox'],
-                        'vest_score': person_data['vest_score'],
+                        'helmet': person_data.get('helmet'),
+                        'vest': person_data.get('vest'),
+                        'helmet_bbox': person_data.get('helmet_bbox'),
+                        'helmet_score': person_data.get('helmet_score'),
+                        'vest_bbox': person_data.get('vest_bbox'),
+                        'vest_score': person_data.get('vest_score'),
                         'last_updated': frame_idx
                     }
         processing_metrics["ppe_detection_time"] += time.time() - ppe_start
@@ -236,6 +241,17 @@ def process_video(
             draw_person(frame, pbox, track_id=pid,
                         kpt_xy=kxy, kpt_conf=kcf, kpt_thr=kpt_thr, draw_kpts=draw_kpts,
                         helmet=helmet, vest=vest)
+            
+            # **추가된 로직: 신체 부위 감지 이력 및 알림**
+            if pid is not None and person_history is not None and get_person_part_with_history is not None:
+                if pid not in person_history:
+                    person_history[pid] = Person(pid)
+
+                current_part, count = get_person_part_with_history(kxy, kcf, kpt_thr, person_history[pid])
+
+                if count >= 10:
+                    logging.info(f"[알림] ID {pid}의 {current_part}가 {count}프레임 이상 연속 감지되었습니다.")
+
 
             # crop 저장 (bbox_id 별 비디오)
             pid = int(ids[i]) if (ids is not None and i < len(ids) and ids[i] is not None) else None
