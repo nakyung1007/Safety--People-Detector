@@ -2,7 +2,7 @@
 Data/Images/
 Data/Video/
 Data/videos/
-Data/output/logs/
+# Data/output/logs/
 Data/output/crops/
 Data/output/videos/
 Data/output/video/
