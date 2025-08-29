@@ -29,9 +29,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from config import *                      # VIDEO_DIR, OUT_DIR, MODEL_PEOPLE_PATH, MODEL_PPE_PATH, ...
-from tracker import *                     # Tracker
-from ppe_detection import *               # PPEDetector, assign_ppe_to_person_boxes
-from people_detection import *            # draw_person, get_person_part
+from Model.src.yolo.tracker import *                     # Tracker
+from Model.src.yolo.ppe_detection import *               # PPEDetector, assign_ppe_to_person_boxes
+from Model.src.yolo.people_detection import *            # draw_person, get_person_part
 
 # ---------------- 경로 유틸 ----------------
 def _resolve(rel_or_abs: str) -> Path:
@@ -293,7 +293,8 @@ def process_video(
             ppe_res = ppe_model.infer(frame)
             matched = assign_ppe_to_person_boxes(ppe_res, person_xyxys, iou_thr=iou_thr)
             for i, person_data in enumerate(matched):
-                if i < len(ids) and ids[i] is not None:
+                 # ids가 None이 아닌지 먼저 확인
+                 if ids is not None and i < len(ids) and ids[i] is not None:
                     pid = int(ids[i])
                     ppe_states[pid] = {
                         'helmet': person_data.get('helmet'),
@@ -309,7 +310,8 @@ def process_video(
         # 3) 최신 PPE 상태 적용
         ppe_list = []
         for i in range(N):
-            pid = int(ids[i]) if (ids is not None and ids[i] is not None) else None
+            # ids가 None이 아닐 때만 pid를 가져옵니다.
+            pid = int(ids[i]) if (ids is not None and i < len(ids) and ids[i] is not None) else None
             if pid is not None and pid in ppe_states:
                 ppe_list.append({'helmet': ppe_states[pid]['helmet'],
                                  'vest': ppe_states[pid]['vest']})
@@ -320,7 +322,8 @@ def process_video(
         t0 = time.time()
         for i in range(N):
             pbox  = person_xyxys[i]
-            pid   = int(ids[i]) if (ids is not None and ids[i] is not None) else None
+           # ids가 None이 아닐 때만 pid를 가져옵니다.
+            pid = int(ids[i]) if (ids is not None and i < len(ids) and ids[i] is not None) else None
             score = float(scores[i]) if i < len(scores) else 0.0
             kxy   = kpt_xy[i]   if (kpt_xy   is not None and i < len(kpt_xy))   else None
             kcf   = kpt_conf[i] if (kpt_conf is not None and i < len(kpt_conf)) else None

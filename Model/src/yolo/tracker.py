@@ -86,6 +86,23 @@ class Tracker:
         )
         return [self._process_results(r) for r in results]
     
+
+    def track_video_stream(self, video_path: str):
+        """비디오 전체에 대한 추적을 수행하고 제너레이터 반환"""
+        results_generator = self.model.track(
+            source=video_path,
+            imgsz=self.img_size,
+            conf=self.det_conf,
+            classes=[0],             # person만
+            persist=True,            # 트랙 상태 유지
+            verbose=False,
+            device=self.device,
+            tracker=self.tracker_yaml,
+            stream=True  # 이 부분을 추가합니다.
+        )
+        return results_generator
+    
+    
     def _process_results(self, r) -> Dict[str, Optional[np.ndarray]]:
         """추적 결과 처리"""
         boxes = r.boxes
