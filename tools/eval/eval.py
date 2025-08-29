@@ -1,24 +1,27 @@
 # tools/eval/evaluate_ppe.py
 # -*- coding: utf-8 -*-
 """
-두 개의 분리된 파일(GT.jsonl, Pred.jsonl)을 비교하여
+두 개의 분리된 파일(GT.json/jsonl, Pred.json/jsonl/csv)을 비교하여
 - 사람 단위 분류 지표: Accuracy / Precision / Recall / F1 (helmet, vest 각각)
 - 박스 단위 검출 지표: mAP@0.5 (helmet, vest 각각)
 를 계산합니다.
 
 ➡️ 인자 없이 실행하려면 파일 상단 DEFAULT_* 경로만 바꾸세요.
 CLI 인자도 그대로 지원합니다.
+예)
+python tools/eval/evaluate_ppe.py
+python tools/eval/evaluate_ppe.py --gt ..\..\Data\output\quick_test_all.jsonl --pred ..\..\Data\output\logs\tracks.csv
 """
 
-import argparse, json, os, sys
+import argparse, json, os, sys, csv, ast
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 
 # ======== 여기를 네 환경에 맞게 바꾸면 인자 없이 실행 가능 ========
-DEFAULT_GT          = r"..\Data\output\quick_test_all.jsonl"        # 또는 .json
-DEFAULT_PRED        = r"C:\path\to\Pred.jsonl"      # 또는 .json
-DEFAULT_OUT         = str((Path(__file__).resolve().parent / "reports" / "evaluation.json"))                           # 리포트 저장 경로(비우면 파일 저장 안 함)
+DEFAULT_GT          = r"..\..\Data\output\quick_test_all.jsonl"   # .json/.jsonl
+DEFAULT_PRED        = r"..\..\Data\output\logs\tracks.csv"        # .csv/.json/.jsonl 모두 지원
+DEFAULT_OUT         = str((Path(__file__).resolve().parent / "reports" / "evaluation.json"))
 DEFAULT_IOU         = 0.5
 DEFAULT_SKIP_POLICY = "negative"  # "negative" | "ignore"
 # ================================================================
@@ -31,6 +34,7 @@ def _norm_path(p: str) -> str:
     except Exception:
         return str(p)
 
+# ---------- 로더들 ----------
 def load_json_or_jsonl(path: Path) -> List[dict]:
     text = path.read_text(encoding="utf-8").strip()
     if not text:
@@ -49,12 +53,96 @@ def load_json_or_jsonl(path: Path) -> List[dict]:
             rows.append(json.loads(ln))
         return rows
 
+def _maybe_list4(x):
+    """문자열 "[x1,x2,x3,x4]" 혹은 튜플/리스트를 4원소 float 리스트로 변환."""
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s == "" or s.lower() in ("none", "null"):
+        return None
+    try:
+        v = json.loads(s)
+    except Exception:
+        try:
+            v = ast.literal_eval(s)
+        except Exception:
+            return None
+    if isinstance(v, (list, tuple)) and len(v) == 4:
+        try:
+            return [float(v[0]), float(v[1]), float(v[2]), float(v[3])]
+        except Exception:
+            return None
+    return None
+
+def load_csv_normalized(path: Path) -> List[dict]:
+    """
+    tracker 로그 CSV를 Pred 표준 레코드로 정규화.
+    지원 헤더(네 코드 기준):
+      video_name, frame, id, x1, y1, x2, y2, score, helmet, vest, part,
+      helmet_bbox, helmet_score, vest_bbox, vest_score
+    """
+    out: List[dict] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        rdr = csv.DictReader(f)
+        for r in rdr:
+            try:
+                # 필수값
+                x1 = float(r.get("x1", 0)); y1 = float(r.get("y1", 0))
+                x2 = float(r.get("x2", 0)); y2 = float(r.get("y2", 0))
+                frame = int(float(r.get("frame", r.get("frame_number", 0))))
+                video_name = r.get("video_name") or r.get("video_path") or ""
+
+                row = {
+                    "video_path":   video_name,                # 비디오 기반 키
+                    "frame_number": frame,
+                    "person_xyxy":  [x1, y1, x2, y2],
+                    "helmet":       r.get("helmet"),
+                    "vest":         r.get("vest"),
+                }
+
+                # mAP용 박스/스코어를 Pred 표준 키로 매핑
+                hb = _maybe_list4(r.get("helmet_bbox"))
+                if hb is not None:
+                    row["helmet_xyxy"] = hb
+                hs = r.get("helmet_score")
+                if hs not in (None, "", "None"):
+                    try: row["helmet_conf"] = float(hs)
+                    except: pass
+
+                vb = _maybe_list4(r.get("vest_bbox"))
+                if vb is not None:
+                    row["vest_xyxy"] = vb
+                vs = r.get("vest_score")
+                if vs not in (None, "", "None"):
+                    try: row["vest_conf"] = float(vs)
+                    except: pass
+
+                out.append(row)
+            except Exception:
+                # 문제 행은 스킵
+                continue
+    return out
+
+def load_rows(path: Path) -> List[dict]:
+    suf = path.suffix.lower()
+    if suf in (".json", ".jsonl"):
+        return load_json_or_jsonl(path)
+    if suf == ".csv":
+        return load_csv_normalized(path)
+    raise ValueError(f"지원하지 않는 포맷: {path}")
+
+# ---------- 공용 유틸 ----------
 def frame_key(row: dict) -> Tuple[str, int]:
-    if "image_path" in row and row["image_path"]:
-        return (_norm_path(row["image_path"]), int(row.get("frame_number", 0)))
-    vp = _norm_path(row.get("video_path", ""))
-    fn = int(row.get("frame_number", 0))
-    return (f"{vp}", fn)
+    """
+    같은 프레임을 식별하기 위한 키.
+    - 이미지 기반: (image_path, frame_number)
+    - 비디오 기반: (video_path|video_name, frame_number|frame)
+    """
+    if row.get("image_path"):
+        return (_norm_path(row["image_path"]), int(row.get("frame_number", row.get("frame", 0))))
+    vp = row.get("video_path") or row.get("video_name") or ""
+    fn = int(row.get("frame_number", row.get("frame", 0)))
+    return (_norm_path(vp), fn)
 
 def iou_xyxy(a, b) -> float:
     ax1, ay1, ax2, ay2 = map(float, a)
@@ -83,7 +171,7 @@ def greedy_match(gt_boxes: List[List[float]], pred_boxes: List[List[float]], iou
     for iou, gi, pj in sorted(cands, key=lambda x: x[0], reverse=True):
         if pj in used_pred:
             continue
-        if any(m[0]==gi for m in matches):
+        if any(m[0] == gi for m in matches):
             continue
         used_pred.add(pj)
         matches.append((gi, pj, iou))
@@ -107,19 +195,34 @@ def prf_from_counts(tp: int, fp: int, fn: int, tn: int) -> Dict[str, float]:
     f1 = 2*prec*rec/max(prec+rec, 1e-12)
     return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
-def eval_classification(gt_rows: List[dict], pred_rows: List[dict], iou_thr: float, skip_policy: str):
+# ---------- 분류 지표 ----------
+def eval_classification(gt_rows: List[dict], pred_rows: List[dict], iou_thr: float, skip_policy: str, debug: bool=False):
     gt_by_frame: Dict[Tuple[str,int], List[dict]] = {}
     pr_by_frame: Dict[Tuple[str,int], List[dict]] = {}
     for r in gt_rows:   gt_by_frame.setdefault(frame_key(r), []).append(r)
     for r in pred_rows: pr_by_frame.setdefault(frame_key(r), []).append(r)
-    frames = sorted(set(gt_by_frame.keys()) & set(pr_by_frame.keys()))
+
+    gt_keys = set(gt_by_frame.keys())
+    pr_keys = set(pr_by_frame.keys())
+    frames = sorted(gt_keys & pr_keys)
+
+    if debug:
+        print(f"[DEBUG] GT frames={len(gt_keys)}  Pred frames={len(pr_keys)}  Intersect={len(frames)}")
+        if len(frames) == 0:
+            print("  - 샘플 GT key 5개:", list(gt_keys)[:5])
+            print("  - 샘플 Pred key 5개:", list(pr_keys)[:5])
+            print("  ※ GT가 image_path 기반, Pred가 video_path 기반이면 교집합이 0이 됩니다.")
+
     res = {"helmet":{"tp":0,"fp":0,"fn":0,"tn":0,"ignored":0,"n_pairs":0},
            "vest":  {"tp":0,"fp":0,"fn":0,"tn":0,"ignored":0,"n_pairs":0}}
+    pair_cnt = 0
+
     for fk in frames:
         gt_list = gt_by_frame[fk]; pr_list = pr_by_frame[fk]
         gt_boxes = [g.get("person_xyxy") for g in gt_list]
         pr_boxes = [p.get("person_xyxy") for p in pr_list]
         matches = greedy_match(gt_boxes, pr_boxes, iou_thr=iou_thr)
+        pair_cnt += len(matches)
         for gi, pj, _ in matches:
             g = gt_list[gi]; p = pr_list[pj]
             g_h = to_bool(g.get("helmet")); p_h = to_bool(p.get("helmet"))
@@ -136,11 +239,16 @@ def eval_classification(gt_rows: List[dict], pred_rows: List[dict], iou_thr: flo
                 elif (not gt_val) and pr_val:      res[key]["fp"] += 1
                 elif gt_val and (not pr_val):      res[key]["fn"] += 1
                 res[key]["n_pairs"] += 1
+
+    if debug:
+        print(f"[DEBUG] matched pairs={pair_cnt}")
+
     out = {}
     for k in ("helmet","vest"):
         c = res[k]; m = prf_from_counts(c["tp"], c["fp"], c["fn"], c["tn"]); m.update(c); out[k]=m
     return out
 
+# ---------- mAP ----------
 def average_precision(preds: List[Tuple[str,int,List[float],float]],
                       gts: Dict[Tuple[str,int], List[List[float]]],
                       iou_thr: float) -> float:
@@ -178,8 +286,8 @@ def average_precision(preds: List[Tuple[str,int,List[float],float]],
 def eval_map(gt_rows: List[dict], pred_rows: List[dict], iou_thr: float):
     def media_id_and_frame(row: dict) -> Tuple[str,int]:
         if "image_path" in row and row["image_path"]:
-            return (_norm_path(row["image_path"]), int(row.get("frame_number", 0)))
-        return (_norm_path(row.get("video_path","")), int(row.get("frame_number", 0)))
+            return (_norm_path(row["image_path"]), int(row.get("frame_number", row.get("frame", 0))))
+        return (_norm_path(row.get("video_path") or row.get("video_name") or ""), int(row.get("frame_number", row.get("frame", 0))))
     gt_helmet: Dict[Tuple[str,int], List[List[float]]] = {}
     gt_vest:   Dict[Tuple[str,int], List[List[float]]] = {}
     for g in gt_rows:
@@ -208,10 +316,11 @@ def _pct(x: float) -> str:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gt",   type=Path, help="GT json/jsonl 경로")
-    parser.add_argument("--pred", type=Path, help="Pred json/jsonl 경로")
+    parser.add_argument("--pred", type=Path, help="Pred json/jsonl/csv 경로")
     parser.add_argument("--out",  type=Path, help="리포트 저장 경로(json)")
     parser.add_argument("--iou",  type=float, default=DEFAULT_IOU)
     parser.add_argument("--skip_policy", choices=["negative","ignore"], default=DEFAULT_SKIP_POLICY)
+    parser.add_argument("--debug", action="store_true", help="매칭 디버그 출력")
     args = parser.parse_args()
 
     # 인자 없으면 DEFAULT_* 사용
@@ -227,10 +336,12 @@ def main():
     if not pred_path.exists():
         print(f"[ERR] Pred 파일을 찾을 수 없습니다: {pred_path}"); sys.exit(1)
 
-    gt_rows   = load_json_or_jsonl(gt_path)
-    pred_rows = load_json_or_jsonl(pred_path)
+    gt_rows   = load_rows(gt_path)
+    pred_rows = load_rows(pred_path)
 
-    cls_metrics = eval_classification(gt_rows, pred_rows, iou_thr=args.iou, skip_policy=args.skip_policy)
+    print(f"\nLoaded: GT={len(gt_rows)} rows, Pred={len(pred_rows)} rows")
+
+    cls_metrics = eval_classification(gt_rows, pred_rows, iou_thr=args.iou, skip_policy=args.skip_policy, debug=args.debug)
     map_metrics = eval_map(gt_rows, pred_rows, iou_thr=args.iou)
 
     report = {
