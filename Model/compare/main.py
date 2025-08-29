@@ -9,14 +9,11 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT) 
 
-from Model.src.yolo.people_detection import *
-from Model.src.yolo.ppe_detection import PPEDetector
 from Model.src.yolo.tracker import Tracker
 from config import *
 
-VIDEO_DIR =  "../../Data/Real"
+VIDEO_DIR = "../../Data/Real"
 OUT_DIR = "../../Data/output/compare"
-MODEL_PPE_PATH = os.path.join(PROJECT_ROOT, "Model", "checkpoints", "yolo11n_safety.pt")
 
 CSV_FIELDS = [
     "total_frames", "valid_frames", "processed_fps",
@@ -34,44 +31,35 @@ def append_csv_row(csv_path: str, row: dict):
         safe_row = {k: row.get(k, "") for k in CSV_FIELDS}
         w.writerow(safe_row)
 
-
-def process_video(video_path: str, model_instance: YOLO):
+def process_video_tracker(video_path: str, tracker_instance: Tracker, model_name: str, tracker_name: str):
     """
-    하나의 비디오 파일에 대해 YOLO 모델 성능을 측정합니다.
+    하나의 비디오 파일에 대해 Tracker 성능을 측정합니다.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"오류: '{video_path}' 파일을 열 수 없습니다.")
         return None
-
+    
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     valid_frames = 0
-    start_time = time.perf_counter()
-
-    print(f"처리 중: {video_path}")
     
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # YOLO 모델 감지 실행
-        results = model_instance(
-            frame,
-            imgsz=IMG_SIZE,
-            conf=DET_CONF,
-            device=DEVICE,
-            verbose=False,
-        )
-
-        # 감지된 객체(사람)가 있으면 유효 프레임으로 카운트
-        if len(results[0].boxes) > 0:
+    print(f"처리 중: {video_path} | 모델: {model_name}, 트래커: {tracker_name}")
+    
+    start_time = time.perf_counter()
+    
+    # 트래커의 track_video_stream 메소드를 사용하고 제너레이터를 순회
+    results = tracker_instance.track_video_stream(video_path)
+    
+    # 제너레이터는 반복문을 통해 결과를 하나씩 가져옵니다.
+    for r in results:
+        # 이 루프를 한 번 돌 때마다 한 프레임씩 처리됩니다.
+        if r.boxes.id is not None and len(r.boxes.id) > 0:
             valid_frames += 1
             
     end_time = time.perf_counter()
     duration = end_time - start_time
     processed_fps = total_frames / duration if duration > 0 else 0.0
-    
+
     cap.release()
     
     print(f"완료: {video_path} | 유효프레임: {valid_frames}/{total_frames} | {processed_fps:.2f} FPS(처리)")
@@ -88,7 +76,6 @@ def process_video(video_path: str, model_instance: YOLO):
 def main():
     
     csv_path = os.path.join(OUT_DIR, "performance_results.csv")
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
 
     # 비디오 수집
     video_paths = []
@@ -100,43 +87,38 @@ def main():
         print(f"오류: '{VIDEO_DIR}' 경로에 비디오 파일이 없습니다.")
         return
 
-    # --- 1. PeopleDetector (YOLO) 성능 측정 ---
-    print("PeopleDetector 성능 측정 시작...")
-    # people_detector = YOLO(MODEL_PEOPLE_PATH)
-    people_detector = YOLO(MODEL_PATH)
-    for video_path in video_paths:
-        summary = process_video(video_path, people_detector)
-        if summary:
-            append_csv_row(csv_path, {
-                "total_frames": summary["total_frames"],
-                "valid_frames": summary["valid_frames"],
-                "processed_fps": summary["processed_fps"],
-                # "model_path": os.path.abspath(MODEL_PEOPLE_PATH),
-                "model_path": os.path.abspath(MODEL_PATH),
-                "tracker_yaml": TRACKER_YAML,
-                "img_size": IMG_SIZE,
-                "det_conf": DET_CONF,
-                "device": DEVICE,
-            })
-    print("PeopleDetector 성능 측정 완료.")
+    # config.py에 정의된 값 사용
+    # model_path = os.path.join(PROJECT_ROOT, "Model", MODEL_PEOPLE_PATH) # yolo11n-pose.pt
+    model_path = os.path.join(PROJECT_ROOT, "Model", MODEL_PATH) # yolo8n-pose.pt
+    tracker_yaml = TRACKER_YAML
+    # model_name = os.path.basename(MODEL_PEOPLE_PATH) # yolo11n-pose.pt
+    model_name = os.path.basename(MODEL_PATH) # yolo8n-pose.pt
 
-    # --- 2. PPEDetector (YOLO) 성능 측정 ---
-    print("PPEDetector 성능 측정 시작...")
-    ppe_detector = YOLO(MODEL_PPE_PATH)
+    print(f"\n--- 성능 측정 시작: 모델={model_name}, 트래커={tracker_yaml} ---")
+    
+    # YOLO 모델 로드
+    model_instance = YOLO(model_path)
+    
+    # Tracker 인스턴스화
+    tracker_instance = Tracker(
+        model=model_instance,
+        tracker_name=tracker_yaml
+    )
+
     for video_path in video_paths:
-        summary = process_video(video_path, ppe_detector)
+        summary = process_video_tracker(video_path, tracker_instance, model_name, tracker_yaml)
         if summary:
             append_csv_row(csv_path, {
                 "total_frames": summary["total_frames"],
                 "valid_frames": summary["valid_frames"],
                 "processed_fps": summary["processed_fps"],
-                "model_path": os.path.abspath(MODEL_PPE_PATH),
-                "tracker_yaml": TRACKER_YAML,
+                "model_path": model_name,
+                "tracker_yaml": tracker_yaml,
                 "img_size": IMG_SIZE,
                 "det_conf": DET_CONF,
                 "device": DEVICE,
             })
-    print("PPEDetector 성능 측정 완료.")
+    print(f"--- 성능 측정 완료: 모델={model_name}, 트래커={tracker_yaml} ---")
 
     print(f"\n모든 성능 결과가 {csv_path}에 저장되었습니다. 🎉")
 
