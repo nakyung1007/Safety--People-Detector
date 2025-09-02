@@ -1,0 +1,16 @@
+video_name,total_frames,fps,tracked_persons
+human-accident_bump_rgb_0001_cctv1,393,13.782147103031523,3
+human-accident_hit_rgb_0662_cctv2,356,15.112852386228926,1
+human-accident_jam_rgb_0644_cctv3,326,14.255848065371028,2
+human-accident_jam_rgb_1205_cctv2,352,13.187198033154298,1
+intrusion_attempt-to-set-fire_rgb_0715_cctv3_1,386,12.835414144617172,1
+intrusion_attempt-to-set-fire_rgb_0994_cctv1,404,13.599627218733858,1
+intrusion_attempt-to-set-fire_rgb_1520_cctv1_1,348,13.64211161874924,1
+intrusion_climb-over-fence_rgb_1231_cctv3_1,437,11.203217876942396,5
+intrusion_damage-to-facilities_rgb_0627_cctv2_1,335,12.005000315710934,2
+intrusion_damage-to-facilities_rgb_1241_cctv3_1,341,12.898987379063614,1
+intrusion_normal_rgb_0477_cctv1_2,286,11.158778255799332,1
+intrusion_normal_rgb_0511_cctv1,320,13.449572265309262,1
+intrusion_normal_rgb_0556_cctv4,881,12.789334684015527,1
+intrusion_normal_rgb_0938_cctv2_2,379,11.929213275714822,2
+intrusion_theft_rgb_0549_cctv2,441,12.116509872330226,4
