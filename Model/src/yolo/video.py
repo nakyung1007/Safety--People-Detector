@@ -329,27 +329,13 @@ def process_video(
 
 
     # 성능 메트릭 계산
-    elapsed_s = max(1e-9, time.perf_counter() - start_ts)                 # CHANGED
-    fps_eff   = frame_idx   / elapsed_s                                   # CHANGED: 전체 프레임 소비 속도
-    people_fps= people_calls / elapsed_s                                   # CHANGED: 사람 단계 호출 빈도
-    ppe_fps   = ppe_calls    / elapsed_s                                   # CHANGED: PPE 단계 호출 빈도
-
-    avg_frame_ms = (frame_time_accum_s / frame_idx * 1000.0) if frame_idx else 0.0  # CHANGED: 평균 프레임 처리시간(ms)
-
-    
+    elapsed_s = max(1e-9, time.perf_counter() - start_ts)                
+    fps_eff   = frame_idx   / elapsed_s                                   
+   
     performance_metrics = {
         "total_frames": frame_idx,
         "fps": fps_eff,
-        "ppe_fps": ppe_fps,
-        "people_fps": people_fps,
     }
-
-    # 성능 로그 저장
-    perf_log_path = out_logs_dir / f"{video_path.stem}_performance.csv"
-    with open(perf_log_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f); writer.writerow(["Metric", "Value"])
-        for k, v in performance_metrics.items():
-            writer.writerow([k, f"{v:.3f}"])
 
     # 해제
     cap.release()
