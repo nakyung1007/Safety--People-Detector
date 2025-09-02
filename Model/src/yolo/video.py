@@ -23,6 +23,7 @@ from ppe_detection import *
 from people_detection import *       
 from Model.utils.face_blur import estimate_face_area, apply_face_blur
 
+
 # checkpoint 경로
 def _resolve(rel_or_abs: str) -> Path:
     p = Path(rel_or_abs)
@@ -211,7 +212,8 @@ def process_video(
             ppe_res = ppe_model.infer(frame)
             matched = assign_ppe_to_person_boxes(ppe_res, person_xyxys, iou_thr=iou_thr)
             for i, person_data in enumerate(matched):
-                if i < len(ids) and ids[i] is not None:
+                 # ids가 None이 아닌지 먼저 확인
+                 if ids is not None and i < len(ids) and ids[i] is not None:
                     pid = int(ids[i])
                     ppe_states[pid] = {
                         'helmet': person_data.get('helmet'),
@@ -226,7 +228,8 @@ def process_video(
         # 3) 최신 PPE 상태 적용
         ppe_list = []
         for i in range(N):
-            pid = int(ids[i]) if (ids is not None and ids[i] is not None) else None
+            # ids가 None이 아닐 때만 pid를 가져옵니다.
+            pid = int(ids[i]) if (ids is not None and i < len(ids) and ids[i] is not None) else None
             if pid is not None and pid in ppe_states:
                 ppe_list.append({'helmet': ppe_states[pid]['helmet'],
                                  'vest': ppe_states[pid]['vest']})
@@ -238,6 +241,8 @@ def process_video(
         for i in range(N):
             pbox  = person_xyxys[i]
             pid   = int(ids[i]) if (ids is not None and ids[i] is not None) else None
+
+          
             kxy   = kpt_xy[i]   if (kpt_xy   is not None and i < len(kpt_xy))   else None
             kcf   = kpt_conf[i] if (kpt_conf is not None and i < len(kpt_conf)) else None
             helmet= ppe_list[i]["helmet"]
