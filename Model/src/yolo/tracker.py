@@ -17,18 +17,17 @@ class Tracker:
         tracker_name: str = TRACKER_YAML,
         img_size: int = IMG_SIZE,
         det_conf: float = DET_CONF,
-        device: str = 'cpu',  # 항상 CPU 사용
+        device: str = 'cpu', 
     ):
         self.model = model
-        self.model.cpu()  # 명시적으로 CPU 모드로 설정
+        self.model.cpu()  
         self.img_size = img_size
         self.det_conf = det_conf
         self.device = 'cpu'
         self.tracker_yaml = self._resolve_tracker_yaml(tracker_name)
         
-        # CPU 성능 최적화
-        self.model.model.half = False  # FP16 비활성화
-        self.model.model.fuse()  # 모델 퓨징
+        self.model.model.half = False  
+        self.model.model.fuse()  
         
         self._id_map: Dict[int, int] = {}  
         self._next_cid: int = 1
@@ -64,8 +63,8 @@ class Tracker:
             frame,
             imgsz=self.img_size,
             conf=self.det_conf,
-            classes=[0],             # person만
-            persist=True,            # 트랙 상태 유지
+            classes=[0],             
+            persist=True,            
             verbose=False,
             device=self.device,
             tracker=self.tracker_yaml
@@ -78,8 +77,8 @@ class Tracker:
             source=video_path,
             imgsz=self.img_size,
             conf=self.det_conf,
-            classes=[0],             # person만
-            persist=True,            # 트랙 상태 유지
+            classes=[0],             
+            persist=True,           
             verbose=False,
             device=self.device,
             tracker=self.tracker_yaml
@@ -93,12 +92,12 @@ class Tracker:
             source=video_path,
             imgsz=self.img_size,
             conf=self.det_conf,
-            classes=[0],             # person만
-            persist=True,            # 트랙 상태 유지
+            classes=[0],             
+            persist=True,           
             verbose=False,
             device=self.device,
             tracker=self.tracker_yaml,
-            stream=True  # 이 부분을 추가합니다.
+            stream=True
         )
         return results_generator
     
