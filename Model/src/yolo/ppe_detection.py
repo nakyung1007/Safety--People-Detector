@@ -11,31 +11,21 @@ from config import *
 class PPEDetector:
     def __init__(self, model_path, conf=0.25, device='cpu', imgsz=640, cache_size=5):
         self.model = YOLO(model_path)
-        self.model.cpu()  # 명시적으로 CPU 모드로 설정
+        self.model.cpu()  
         self.conf = conf
-        self.device = 'cpu'  # 항상 CPU 사용
+        self.device = 'cpu'  
         self.imgsz = imgsz
         self.cache_size = cache_size
-        self.result_cache = {}  # frame_idx -> result
+        self.result_cache = {}  
         
-        # CPU 성능 최적화를 위한 설정
-        self.model.model.half = False  # FP16 비활성화
-        self.model.model.fuse()  # 모델 퓨징
+        self.model.model.half = False  
+        self.model.model.fuse()  
         
     def infer(self, frame, frame_idx=None, batch_size=1):
-        """
-        프레임 또는 프레임 배치에 대해 PPE 탐지 수행
-        
-        Args:
-            frame: 단일 프레임 또는 프레임 배치
-            frame_idx: 현재 프레임 인덱스 (캐시 사용 시 필요)
-            batch_size: 배치 크기
-        """
-        # 캐시된 결과가 있으면 반환
+    
         if frame_idx is not None and frame_idx in self.result_cache:
             return self.result_cache[frame_idx]
         
-        # 배치 처리
         results = self.model(frame, 
                            imgsz=self.imgsz, 
                            conf=self.conf, 
@@ -43,19 +33,15 @@ class PPEDetector:
                            verbose=False,
                            batch=batch_size)
         
-        # 단일 프레임인 경우
         if not isinstance(frame, (list, tuple)):
             result = results[0]
-            # 캐시 업데이트
             if frame_idx is not None:
                 self.result_cache[frame_idx] = result
-                # 캐시 크기 제한
                 if len(self.result_cache) > self.cache_size:
                     min_idx = min(self.result_cache.keys())
                     del self.result_cache[min_idx]
             return result
         
-        # 배치 처리 결과 반환
         return results
 
 def _iou(a: np.ndarray, b: np.ndarray) -> float:
@@ -78,19 +64,7 @@ def assign_ppe_to_person_boxes(ppe_res,
                                iou_thr: float = 0.05,
                                prev_results: List[Dict[str, Optional[bool]]] = None,
                                confidence_threshold: float = 0.5) -> List[Dict[str, Optional[bool]]]:
-    """
-    ppe_res: PPEDetector.infer(frame) 결과(한 프레임)
-    person_xyxys: (N,4) array
-    prev_results: 이전 프레임의 결과 (temporal smoothing용)
-    confidence_threshold: PPE 탐지 신뢰도 임계값
-    반환: [{"helmet": T/F/None, "vest": T/F/None}, ...] 길이 N
-    규칙: 
-    1. nohat/novest가 잡히면 False 우선
-    2. hat/vest가 잡히면 True
-    3. 이전 결과가 있으면 temporal smoothing 적용
-    4. 그 외의 경우 None
-    매칭: PPE 박스 중심점이 person 내부 or IoU >= iou_thr
-    """
+ 
     if ppe_res is None or ppe_res.boxes is None or len(ppe_res.boxes) == 0 or len(person_xyxys) == 0:
         return [{"helmet": None, "vest": None} for _ in range(len(person_xyxys))]
 
@@ -102,8 +76,6 @@ def assign_ppe_to_person_boxes(ppe_res,
     idx_nohat  = [i for i,c in enumerate(clss) if names[c] == "nohat"]
     idx_vest   = [i for i,c in enumerate(clss) if names[c] == "vest"]
     idx_novest = [i for i,c in enumerate(clss) if names[c] == "novest"]
-
-    confs = ppe_res.boxes.conf.cpu().numpy()  # confidence scores 추가
     
     out = []
     for p in person_xyxys:
@@ -124,9 +96,7 @@ def assign_ppe_to_person_boxes(ppe_res,
             "helmet": False if helmet_false else (True if best_helmet else None),
             "vest": False if vest_false else (True if best_vest else None),
             "helmet_bbox": xyxy[best_helmet[0]].tolist() if best_helmet else None,
-            "helmet_score": float(confs[best_helmet[0]]) if best_helmet else None,
             "vest_bbox": xyxy[best_vest[0]].tolist() if best_vest else None,
-            "vest_score": float(confs[best_vest[0]]) if best_vest else None
         }
         out.append(result)
     return out
