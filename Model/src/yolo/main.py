@@ -1,20 +1,21 @@
 from pathlib import Path
 import argparse
 import os,sys
+import csv
 
+#경로 모듈 불러오기
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..','..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 from config import *
 
 from video import (
-    process_video, list_videos_in_dir,  # 처리 함수/도우미
-    _resolve, _resolve_ckpt             # 경로 보정 유틸( video.py 내부 제공 )
+    process_video, list_videos_in_dir,  
+    _resolve, _resolve_ckpt            
 )
-
-# 추가
 from typing import Dict
 from people_detection import Person, get_person_part_with_history
+
 
 def run_single(video_path: Path,
                out_root: Path,
@@ -32,12 +33,12 @@ def run_single(video_path: Path,
     out_videos_dir = out_root / "videos"
     out_crops_root = out_root / "crops"
     out_logs_dir   = out_root / "logs"
+    out_logs_dir.mkdir(parents=True, exist_ok=True)
     combined_csv_path = out_logs_dir / "tracks.csv"
 
-    # 추가: 사람 객체 이력을 저장할 딕녀서너리
     person_history: Dict[int, Person] = {}
 
-    saved = process_video(
+    out_mp4, metrics = process_video(
         video_path=video_path,
         out_videos_dir=out_videos_dir,
         out_crops_root=out_crops_root,
@@ -54,12 +55,23 @@ def run_single(video_path: Path,
         iou_thr=iou_thr,
         vid_stride=vid_stride,
         show=show, 
-
-        # 함수 인자 전달 시 변수명 통일
         person_history=person_history,
         get_person_part_with_history=get_person_part_with_history,
     )
-    print(f"✅ Saved video: {saved}")
+    
+    print(f" Saved video: {out_mp4, metrics}")
+    
+    perf_csv_path = out_logs_dir / "performance.csv"
+    write_header = not perf_csv_path.exists()
+    with open(perf_csv_path, "a", newline="", encoding="utf-8") as f:
+        fieldnames = ["video_name"] + list(metrics.keys())
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            w.writeheader()
+        row = {"video_name": Path(video_path).stem}
+        row.update(metrics)
+        w.writerow(row)
+    print(f"{perf_csv_path}")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -77,7 +89,6 @@ def main():
     ap.add_argument("--show", action="store_true", help="윈도우로 미리보기")
     args = ap.parse_args()
 
-    # --- 경로/설정 병합 (config 기본값 + CLI override) ---
     video_dir = _resolve(args.dir) if args.dir else _resolve(VIDEO_DIR)
     out_root  = _resolve(args.out) if args.out else _resolve(OUT_DIR)
     pose_ckpt = _resolve_ckpt(MODEL_PEOPLE_PATH)
@@ -93,10 +104,10 @@ def main():
     iou_thr   = args.iou_thr if args.iou_thr is not None else 0.05
     show_flag = bool(args.show)
 
-    # --- 실행 ---
-    if args.video:
-        vp = Path(args.video)
-        print(f"[INFO] 단일 파일 처리: {vp}")
+    vids = list_videos_in_dir(video_dir)
+    print(f"[INFO] 폴더 처리: {video_dir} (총 {len(vids)}개)")
+    for vp in vids:
+        print(f" - 처리 중: {vp}")
         run_single(
             video_path=vp,
             out_root=out_root,
@@ -112,26 +123,6 @@ def main():
             vid_stride=stride,
             show=show_flag
         )
-    else:
-        vids = list_videos_in_dir(video_dir)
-        print(f"[INFO] 폴더 처리: {video_dir} (총 {len(vids)}개)")
-        for vp in vids:
-            print(f" - 처리 중: {vp}")
-            run_single(
-                video_path=vp,
-                out_root=out_root,
-                pose_ckpt=pose_ckpt,
-                ppe_ckpt=ppe_ckpt,
-                tracker_yaml=tracker_y,
-                imgsz=imgsz,
-                det_conf=det_conf,
-                kpt_thr=kpt_thr,
-                draw_kpts=draw_kpts,
-                device=device,
-                iou_thr=iou_thr,
-                vid_stride=stride,
-                show=show_flag
-            )
 
 if __name__ == "__main__":
     main()
