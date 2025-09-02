@@ -1,50 +1,118 @@
-# 건설 현장 작업자 신체 가시성 분류 시스템 (Worker Body-Part Visibility Classification)
+# Safety People Detector 
 
-## 📖 프로젝트 개요 (Overview)
+## Overview
+본 프로젝트는 **(주)머제스** 기업과의 기업 연계형으로 진행되었으며,
+**조선대학교 센서융합인공지능연구실**의 학부 연구생 과제로 수행되었습니다.</br>
+건설 현장에서 사람 전신 탐지와 PPE(개인 보호구: 안전모, 안전조끼) 착용 여부 감지를 수행하는 것으로 CPU에서 약 15 FPS에서 작동되게 하였습니다.
 
-본 프로젝트는 건설 현장 안전 모니터링 시스템의 핵심 구성 요소로, 입력된 이미지 속 작업자의 신체 가시성을 **전신(Full Body), 상반신(Upper Body), 하반신(Lower Body), 얼굴(Face)** 네 가지 카테고리로 정확하게 분류하는 것을 목표로 합니다.
 
-정확한 신체 가시성 분류는 개인보호장비(PPE) 착용 여부 탐지나 위험 행동 분석과 같은 후속 작업의 정확도를 높이는 데 필수적인 전처리 단계입니다. 건설 현장의 다양한 자세, 촬영 각도, 가림(occlusion) 등 복잡한 환경에서 강인한 성능을 내기 위해 두 가지 정보를 결합한 하이브리드 접근 방식을 사용합니다.
+## Contributors
+<table>
+    <tr height="160px">
+        <td align="center" width="150px">
+            <a href="https://github.com/nakyung1007"><img height="110px" src="https://avatars.githubusercontent.com/u/126228131?v=4"/></a>
+            <br />
+            <a href="https://github.com/nakyung1007"><strong>조나경</strong></a>
+            <br />
+        </td>
+        <td align="center" width="150px">
+              <a href="https://github.com/iooah"><img height="110px"  src="https://avatars.githubusercontent.com/u/144919371?v=4"/></a>
+              <br />
+              <a href="https://github.com/iooah"><strong>김수아</strong></a>
+              <br />
+        </td>
+        <td align="center" width="150px">
+              <a href="https://github.com/wlalslzzang"><img height="110px"  src="https://avatars.githubusercontent.com/u/189085901?v=4"/></a>
+              <br />
+              <a href="https://github.com/wlalslzzang"><strong>정지민</strong></a>
+              <br />
+        </td>
+    </tr>
+</table>  
 
----
+지도교수: 김원열 교수 (조선대학교 - 센서융합인공지능연구실)
 
-## ⚙️ 핵심 방법론 (Methodology)
+산학협력 기업: (주)머제스
 
-본 시스템은 **바운딩 박스(Bounding Box) 속성**과 **포즈 추정(Pose Estimation) 키포인트** 정보를 함께 사용하는 **하이브리드(Hybrid) 접근법**을 채택했습니다. 두 정보로부터 특징(Feature)들을 추출하고, 이를 머신러닝 분류기에 학습시켜 최종 결과를 도출합니다.
 
-### 1️⃣ **전처리: 객체 탐지 및 포즈 추정**
+## 📊 Results
 
-- **작업자 탐지**: 입력 이미지에서 YOLO와 같은 객체 탐지 모델을 사용하여 작업자의 위치를 찾는 **바운딩 박스**를 얻습니다.
-- **포즈 추정**: 탐지된 작업자 영역 내에서 YOLO-Pose와 같은 모델을 사용하여 **17개의 신체 주요 관절(키포인트)**의 위치와 신뢰도 점수를 추출합니다.
+<table>
+<tr>
+<td>
 
-### 2️⃣ **특징 공학 (Feature Engineering)**
+###  Performance (Speed)
+| Metric | Value |
+|--------|-------|
+| FPS    | 16.48 FPS |
 
-분류 모델의 성능을 극대화하기 위해, 전처리 단계에서 얻은 두 가지 정보를 다음과 같이 가공하여 의미 있는 특징들을 생성합니다.
+</td>
+<td>
 
-#### A. 바운딩 박스 기반 특징
+###   Helmet Detection
+| Metric    | Value   |
+|-----------|---------|
+| Accuracy  | 69.09 % |
+| F1-Score  | 76.5 %  |
+| Recall    | 71.07 % |
 
-- **가로세로 비율 (Aspect Ratio)**: `바운딩 박스의 높이 / 너비`
-- _(추후 다른 특징들을 여기에 추가할 수 있습니다.)_
+</td>
+<td>
 
-#### B. 키포인트 기반 특징
+###  Vest Detection
+| Metric    | Value   |
+|-----------|---------|
+| Accuracy  | 89.87 % |
+| F1-Score  | 98.65 % |
+| Recall    | 80.97 % |
 
-- **정규화된 상대 좌표**: 모든 키포인트의 좌표를 '목' 중앙점을 기준으로 변환하고, '어깨너비'로 나누어 작업자의 위치나 크기 변화에 상관없이 일관된 특징을 갖도록 합니다.
-- **부위별 키포인트 가시성**: 상반신/하반신 영역에 해당하는 키포인트 중 실제로 탐지된 키포인트의 개수를 각각 계산합니다.
-- **수직 키포인트 분포**: 탐지된 키포인트 중 가장 위에 있는 점과 가장 아래에 있는 점 사이의 수직 거리를 바운딩 박스 높이로 정규화한 값입니다.
+</td>
+<td>
 
-### 3️⃣ **분류 (Classification)**
+### Bodypart Detection
+| Metric    | Value   |
+|-----------|---------|
+| Accuracy  | 91.58 % |
+| F1-Score  | 91.58 % |
+| Recall    | 95.61 % |
 
-- 위에서 생성한 **모든 특징들을 결합**하여 하나의 특징 벡터(Feature Vector)로 만듭니다.
-- 이 특징 벡터를 **RandomForest** 또는 **XGBoost**와 같은 머신러닝 분류 모델에 입력하여 최종적으로 4개의 카테고리 중 하나로 분류합니다.
+</td>
+</tr>
+</table>
 
----
+##  Setup (How to learn)
 
-## 📊 실험 결과 (Results)
+### 1. Settings
+```bash
+git clone https://github.com/username/Safety-People-Detector.git
+cd Safety-People-Detector
 
-_(이 섹션은 향후 비교 실험 결과로 채워질 예정입니다.)_
+# 패키지 설치
+pip install -r requirements.txt
+```
+### 2. Run the application
+```bash
+# 단일 영상(video) 실행
+python src/yolo/main.py --video/data/test_video.mp4 --device cpu
 
-| 모델       | 사용 특징                  | 정확도 (Accuracy) |
-| :--------- | :------------------------- | :---------------- |
-| 모델 A     | 바운딩 박스 단독 사용      | -                 |
-| 모델 B     | 키포인트 단독 사용         | -                 |
-| **모델 C** | **하이브리드 (결합 사용)** | **-**             |
+# 폴더 내 영상(video) 실행
+python src/yolo/main.py --video_dir data/videos --device cpu
+```
+
+##  Model & Environment Setup
+
+| Category   | Details |
+|------------|---------|
+| Detection Models | YOLO v11 Pose (사람 탐지, 전신/상체/하체 분류) <br> YOLO v11 Detection (Helmet, Vest 탐지) |
+| Tracking   | ByteTrack  <br> IoU 기반 사람-PPE 매칭 |
+| Optimization | 입력 크기 640×640 <br> 15 프레임 단위 추론 |
+
+
+
+## Pipeline
+1. Data Input → CCTV/Camera  
+2. Preprocessing → Normalization (640×640)  
+3. Detection → YOLO Pose (person), YOLO Detection (helmet/vest)  
+4. Tracking → ByteTrack, IoU Matching  
+5. Post-processing → Face Blur  
+6. Output → Visualization (video), CSV logs
